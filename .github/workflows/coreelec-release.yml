@@ -24,16 +24,37 @@ jobs:
         with:
           path: inputstream.ffmpegdirect
 
+      - name: Determine release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            version=$(awk '/<addon/{f=1} f && /version="/{match($0,/version="[^"]*"/); print substr($0,RSTART+9,RLENGTH-10); exit}' \
+              inputstream.ffmpegdirect/inputstream.ffmpegdirect/addon.xml.in)
+            tag="$version-CoreELEC21"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $tag already exists, nothing to do"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install cross toolchain and build tools
+        if: steps.tag.outputs.exists != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y g++-arm-linux-gnueabihf cmake autoconf automake autopoint \
             libtool pkg-config nasm gettext zip
 
       - name: Build
+        if: steps.tag.outputs.exists != 'true'
         run: inputstream.ffmpegdirect/tools/coreelec/build-coreelec21-arm.sh "$GITHUB_WORKSPACE/out"
 
       - name: Check binary compatibility with CoreELEC 21 (glibc 2.38, GCC 13)
+        if: steps.tag.outputs.exists != 'true'
         run: |
           so=$(ls out/stage/inputstream.ffmpegdirect/inputstream.ffmpegdirect.so.*)
           glibc=$(arm-linux-gnueabihf-objdump -T "$so" | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1)
@@ -45,16 +66,11 @@ jobs:
           [ "$exports" = "ADDON_Create ADDON_GetTypeMinVersion ADDON_GetTypeVersion " ]
 
       - name: Create release
+        if: steps.tag.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          tag: ${{ steps.tag.outputs.tag }}
         run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            tag="$GITHUB_REF_NAME"
-          else
-            version=$(awk '/<addon/{f=1} f && /version="/{match($0,/version="[^"]*"/); print substr($0,RSTART+9,RLENGTH-10); exit}' \
-              inputstream.ffmpegdirect/inputstream.ffmpegdirect/addon.xml.in)
-            tag="$version-CoreELEC21"
-          fi
           zip=$(ls out/*.zip)
           sha=$(sha256sum "$zip" | cut -d' ' -f1)
           {
