@@ -1,18 +1,22 @@
 name: CoreELEC 21 arm release
 # Builds the add-on for CoreELEC 21 Amlogic-ng.arm (e.g. AVDVPlus R10) with
 # tools/coreelec/build-coreelec21-arm.sh and publishes it as a GitHub release.
-# Triggered by pushing a tag ending in -CoreELEC21, e.g. 69.2.11-CoreELEC21
+# Triggered by pushing a tag ending in -CoreELEC21 (e.g. 69.2.11-CoreELEC21), or by pushing a
+# commit whose message contains [coreelec-release], which tags <addon version>-CoreELEC21.
 
 on:
   push:
     tags:
       - '*-CoreELEC21'
+    branches:
+      - '**'
 
 permissions:
   contents: write
 
 jobs:
   release:
+    if: github.ref_type == 'tag' || contains(github.event.head_commit.message, '[coreelec-release]')
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout add-on
@@ -44,6 +48,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            version=$(awk '/<addon/{f=1} f && /version="/{match($0,/version="[^"]*"/); print substr($0,RSTART+9,RLENGTH-10); exit}' \
+              inputstream.ffmpegdirect/inputstream.ffmpegdirect/addon.xml.in)
+            tag="$version-CoreELEC21"
+          fi
           zip=$(ls out/*.zip)
           sha=$(sha256sum "$zip" | cut -d' ' -f1)
           {
@@ -56,5 +67,5 @@ jobs:
             echo
             echo "SHA-256 \`$(basename "$zip")\`: \`$sha\`"
           } > notes.md
-          gh release create "$GITHUB_REF_NAME" "$zip" --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
+          gh release create "$tag" "$zip" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$tag" --notes-file notes.md
