@@ -118,6 +118,12 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
 endif()
 # Now remove ';''s for all platforms and allow CMake to add them back
 string(REGEX REPLACE ";" " " FFMPEG_LDFLAGS "${FFMPEG_LDFLAGS}")
+if(NOT WIN32 AND NOT APPLE)
+  # Keep the symbols of the statically linked FFmpeg, OpenSSL etc. private to the addon.
+  # Kodi itself is linked against its own (usually different) FFmpeg and OpenSSL, exporting
+  # ours would let the dynamic linker bind the addon's calls to Kodi's libraries instead.
+  string(APPEND FFMPEG_LDFLAGS " -Wl,--exclude-libs,ALL")
+endif()
 set_target_properties(inputstream.ffmpegdirect PROPERTIES LINK_FLAGS "${FFMPEG_LDFLAGS}")
 
 if(CORE_SYSTEM_NAME STREQUAL windowsstore)

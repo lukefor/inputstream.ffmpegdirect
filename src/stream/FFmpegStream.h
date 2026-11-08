@@ -13,12 +13,14 @@
 #include "DemuxStream.h"
 #include "CurlInput.h"
 
+#include <deque>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <sstream>
+#include <unordered_set>
 
 #include <kodi/addon-instance/Inputstream.h>
 #include <kodi/tools/EndTime.h>
@@ -146,6 +148,9 @@ private:
   bool IsTransportStreamReady();
   bool IsProgramChange();
   void StoreSideData(DEMUX_PACKET *pkt, AVPacket *src);
+  void FlushDemuxer();
+  bool IsReplayedLivePacket(const AVPacket& pkt, const AVStream* stream);
+  void ResetReplayDetection();
 
   bool StreamsOpened() { return m_streams.size() > 0; }
 
@@ -195,6 +200,21 @@ private:
   std::string m_programProperty;
   std::string m_manifestType;
   bool m_opened;
+
+  // Live sources can resend data we have already delivered, e.g. when the HTTP
+  // connection is transparently re-established and the server restarts from the
+  // beginning of its buffer. Track recently delivered timestamps per stream so
+  // that such replays can be dropped instead of being played a second time.
+  struct ReplayGuard
+  {
+    int64_t highWaterTs = AV_NOPTS_VALUE;
+    bool skipping = false;
+    int droppedPackets = 0;
+    std::unordered_set<int64_t> deliveredTs;
+    std::deque<int64_t> deliveredOrder;
+  };
+  static const size_t REPLAY_GUARD_HISTORY_SIZE = 8192; // > 2 minutes of packets for typical A/V streams
+  std::map<int, ReplayGuard> m_replayGuards;
 
   HttpProxy m_httpProxy;
   OpenMode m_openMode;

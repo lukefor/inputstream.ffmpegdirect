@@ -100,6 +100,11 @@ void TimeshiftStream::DoReadWrite()
     }
 
     m_condition.notify_one();
+
+    // On EOF or a read error no packet is returned and FFmpeg will return immediately
+    // again, don't spin a CPU core at 100% while waiting for more data
+    if (!pPacket)
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
   Log(LOGLEVEL_DEBUG, "%s - Timeshift: stopped", __FUNCTION__);
   return;

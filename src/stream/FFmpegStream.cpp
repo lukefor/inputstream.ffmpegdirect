@@ -272,6 +272,12 @@ void FFmpegStream::DemuxAbort()
 
 void FFmpegStream::DemuxFlush()
 {
+  FlushDemuxer();
+  ResetReplayDetection();
+}
+
+void FFmpegStream::FlushDemuxer()
+{
   if (m_pFormatContext)
   {
     if (m_pFormatContext->pb)
@@ -331,7 +337,7 @@ DEMUX_PACKET* FFmpegStream::DemuxRead()
     }
     else if (m_pkt.result < 0)
     {
-      DemuxFlush();
+      FlushDemuxer();
     }
     // check size and stream index for being in a valid range
     else if (m_pkt.pkt.size < 0 ||
@@ -343,7 +349,7 @@ DEMUX_PACKET* FFmpegStream::DemuxRead()
       {
         Log(LOGLEVEL_ERROR, "CDVDDemuxFFmpeg::Read() no valid packet");
         bReturnEmpty = true;
-        DemuxFlush();
+        FlushDemuxer();
       }
       else
         Log(LOGLEVEL_ERROR, "CDVDDemuxFFmpeg::Read() returned invalid packet and eof reached");
@@ -371,7 +377,11 @@ DEMUX_PACKET* FFmpegStream::DemuxRead()
 
       AVStream* stream = m_pFormatContext->streams[m_pkt.pkt.stream_index];
 
-      if (IsTransportStreamReady())
+      if (m_isRealTimeStream && IsReplayedLivePacket(m_pkt.pkt, stream))
+      {
+        bReturnEmpty = true;
+      }
+      else if (IsTransportStreamReady())
       {
         if (m_program != UINT_MAX)
         {
@@ -675,8 +685,9 @@ bool FFmpegStream::Open(bool fileinfo)
 {
   const AVInputFormat* iformat = nullptr;
   std::string strFile;
-  m_streaminfo = !m_isRealTimeStream && !m_reopen;;
+  m_streaminfo = !m_isRealTimeStream && !m_reopen;
   m_currentPts = STREAM_NOPTS_VALUE;
+  ResetReplayDetection();
   m_speed = STREAM_PLAYSPEED_NORMAL;
   m_program = UINT_MAX;
   m_seekToKeyFrame = false;
@@ -1091,6 +1102,89 @@ void FFmpegStream::CurrentPTSUpdated()
 {
 }
 
+void FFmpegStream::ResetReplayDetection()
+{
+  m_replayGuards.clear();
+}
+
+bool FFmpegStream::IsReplayedLivePacket(const AVPacket& pkt, const AVStream* stream)
+{
+  // Some live sources (typically IPTV restream servers sending MPEG-TS over HTTP) start
+  // a new connection with the content of their buffer, which can be 10-30 seconds old.
+  // When the connection drops and is transparently re-established (by Kodi's curl
+  // reconnect or FFmpeg's http reconnect) the demuxer simply sees the timestamps jump
+  // back to data which has already been delivered and the player shows it again.
+  // Detect this by remembering the timestamps already delivered for each audio/video
+  // stream and dropping packets which go back to one of them. A backwards jump to
+  // timestamps never seen before is a genuine discontinuity and is passed through.
+
+  if (!stream || !stream->codecpar ||
+      (stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO &&
+       stream->codecpar->codec_type != AVMEDIA_TYPE_AUDIO))
+    return false;
+
+  ReplayGuard& guard = m_replayGuards[pkt.stream_index];
+
+  const int64_t ts = pkt.dts != AV_NOPTS_VALUE ? pkt.dts : pkt.pts;
+  if (ts == AV_NOPTS_VALUE)
+    return guard.skipping;
+
+  auto remember = [&guard](int64_t value) {
+    if (guard.deliveredTs.insert(value).second)
+    {
+      guard.deliveredOrder.push_back(value);
+      if (guard.deliveredOrder.size() > REPLAY_GUARD_HISTORY_SIZE)
+      {
+        guard.deliveredTs.erase(guard.deliveredOrder.front());
+        guard.deliveredOrder.pop_front();
+      }
+    }
+  };
+
+  if (guard.highWaterTs == AV_NOPTS_VALUE || ts > guard.highWaterTs)
+  {
+    if (guard.skipping)
+    {
+      Log(LOGLEVEL_INFO, "%s - Stream %d: caught up with previously delivered data, dropped %d replayed packets",
+          __FUNCTION__, pkt.stream_index, guard.droppedPackets);
+      guard.skipping = false;
+    }
+    guard.highWaterTs = ts;
+    remember(ts);
+    return false;
+  }
+
+  const int64_t oneSecond = av_rescale_q(AV_TIME_BASE, AV_TIME_BASE_Q, stream->time_base);
+  const bool largeJumpBack = guard.highWaterTs - ts >= oneSecond;
+
+  if (guard.deliveredTs.count(ts) > 0 && (guard.skipping || largeJumpBack))
+  {
+    if (!guard.skipping)
+    {
+      Log(LOGLEVEL_WARNING, "%s - Stream %d: source jumped back %.2f seconds to data already delivered (reconnect?), dropping replayed packets",
+          __FUNCTION__, pkt.stream_index, static_cast<double>(guard.highWaterTs - ts) * av_q2d(stream->time_base));
+      guard.skipping = true;
+      guard.droppedPackets = 0;
+    }
+    guard.droppedPackets++;
+    return true;
+  }
+
+  if (largeJumpBack)
+  {
+    // Timestamps we have never delivered, this is a real discontinuity, follow the new timeline
+    Log(LOGLEVEL_INFO, "%s - Stream %d: timestamp discontinuity of -%.2f seconds to new data, following new timeline",
+        __FUNCTION__, pkt.stream_index, static_cast<double>(guard.highWaterTs - ts) * av_q2d(stream->time_base));
+    guard.skipping = false;
+    guard.deliveredTs.clear();
+    guard.deliveredOrder.clear();
+    guard.highWaterTs = ts;
+    remember(ts);
+  }
+
+  return false;
+}
+
 double FFmpegStream::ConvertTimestamp(int64_t pts, int den, int num)
 {
   if (pts == (int64_t)AV_NOPTS_VALUE)
@@ -1468,6 +1562,8 @@ bool FFmpegStream::SeekTime(double time, bool backwards, double* startpts)
 
     if (ret >= 0)
     {
+      ResetReplayDetection();
+
       if (!(m_pFormatContext->iformat->flags & AVFMT_NOTIMESTAMPS))
         m_seekToKeyFrame = true;
 

@@ -1,3 +1,13 @@
+v69.2.11
+- Bump major version to 69
+- Drop replayed packets when a live source jumps back to data already delivered (e.g. after an HTTP reconnect)
+- Drop the overlap when a catchup stream is continued internally (EOF on terminating streams, resume after pause)
+- Align catchup seeks to the source granularity so reported times match the content
+- Don't add the catchup seek offset to packets without timestamps
+- Avoid busy looping in the timeshift reader thread on EOF
+- Keep statically linked FFmpeg/OpenSSL symbols private to the addon on ELF platforms
+- Pass the cross compiler and host to the libiconv build
+
 v22.2.9
 - Made FFmpeg wait for vendored bzip2 and removed bzip2's unused zlib prerequisite
 
