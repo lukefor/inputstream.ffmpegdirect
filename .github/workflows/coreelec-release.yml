@@ -1,0 +1,60 @@
+name: CoreELEC 21 arm release
+# Builds the add-on for CoreELEC 21 Amlogic-ng.arm (e.g. AVDVPlus R10) with
+# tools/coreelec/build-coreelec21-arm.sh and publishes it as a GitHub release.
+# Triggered by pushing a tag ending in -CoreELEC21, e.g. 69.2.11-CoreELEC21
+
+on:
+  push:
+    tags:
+      - '*-CoreELEC21'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout add-on
+        uses: actions/checkout@v5
+        with:
+          path: inputstream.ffmpegdirect
+
+      - name: Install cross toolchain and build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y g++-arm-linux-gnueabihf cmake autoconf automake autopoint \
+            libtool pkg-config nasm gettext zip
+
+      - name: Build
+        run: inputstream.ffmpegdirect/tools/coreelec/build-coreelec21-arm.sh "$GITHUB_WORKSPACE/out"
+
+      - name: Check binary compatibility with CoreELEC 21 (glibc 2.38, GCC 13)
+        run: |
+          so=$(ls out/stage/inputstream.ffmpegdirect/inputstream.ffmpegdirect.so.*)
+          glibc=$(arm-linux-gnueabihf-objdump -T "$so" | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1)
+          glibcxx=$(arm-linux-gnueabihf-objdump -T "$so" | grep -oE 'GLIBCXX_[0-9.]+' | sort -uV | tail -1)
+          exports=$(arm-linux-gnueabihf-nm -D --defined-only "$so" | awk '{print $3}' | grep -v '^_Z' | tr '\n' ' ')
+          echo "Max $glibc, max $glibcxx, C exports: $exports"
+          printf '%s\n' "$glibc" GLIBC_2.38 | sort -CV
+          printf '%s\n' "$glibcxx" GLIBCXX_3.4.32 | sort -CV
+          [ "$exports" = "ADDON_Create ADDON_GetTypeMinVersion ADDON_GetTypeVersion " ]
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          zip=$(ls out/*.zip)
+          sha=$(sha256sum "$zip" | cut -d' ' -f1)
+          {
+            echo "Build of inputstream.ffmpegdirect for **CoreELEC 21 Amlogic-ng.arm** (Kodi 21 Omega, 32-bit ARM userspace), e.g. AVDVPlus R10. FFmpeg 9.0.2 is bundled."
+            echo
+            echo "Install: copy the zip to the box, then Add-ons > Install from zip file."
+            echo
+            echo "### Changes"
+            awk -v RS= 'NR==1' inputstream.ffmpegdirect/inputstream.ffmpegdirect/changelog.txt | tail -n +2
+            echo
+            echo "SHA-256 \`$(basename "$zip")\`: \`$sha\`"
+          } > notes.md
+          gh release create "$GITHUB_REF_NAME" "$zip" --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
