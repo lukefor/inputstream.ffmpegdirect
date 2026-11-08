@@ -23,6 +23,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           path: inputstream.ffmpegdirect
+          fetch-depth: 0
 
       - name: Determine release tag
         id: tag
@@ -71,6 +72,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           tag: ${{ steps.tag.outputs.tag }}
         run: |
+          # GITHUB_TOKEN may not create a tag on a commit that adds workflow files compared to the
+          # default branch, so tag the latest commit that changed anything outside .github instead.
+          # The add-on is built from files outside .github, so this is the same source.
+          target=$(git -C inputstream.ffmpegdirect rev-list -1 "$GITHUB_SHA" -- . ':!.github')
+          echo "Tagging $tag at $target"
           zip=$(ls out/*.zip)
           sha=$(sha256sum "$zip" | cut -d' ' -f1)
           {
@@ -83,5 +89,5 @@ jobs:
             echo
             echo "SHA-256 \`$(basename "$zip")\`: \`$sha\`"
           } > notes.md
-          gh release create "$tag" "$zip" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+          gh release create "$tag" "$zip" --repo "$GITHUB_REPOSITORY" --target "$target" \
             --title "$tag" --notes-file notes.md
