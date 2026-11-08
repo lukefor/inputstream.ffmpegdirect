@@ -12,10 +12,12 @@
 #include <map>
 #include <string>
 
+namespace ffmpegdirect
+{
 class CUrlOptions
 {
 public:
-  typedef std::map<std::string, CVariant> UrlOptions;
+  typedef std::map<std::string, ffmpegdirect::CVariant> UrlOptions;
 
   CUrlOptions();
   CUrlOptions(const std::string &options, const char *strLead = "");
@@ -37,9 +39,10 @@ public:
   virtual void RemoveOption(const std::string &key);
 
   bool HasOption(const std::string &key) const;
-  bool GetOption(const std::string &key, CVariant &value) const;
+  bool GetOption(const std::string &key, ffmpegdirect::CVariant &value) const;
 
 protected:
   UrlOptions m_options;
   std::string m_strLead;
 };
+} // namespace ffmpegdirect

@@ -20,9 +20,9 @@ list(APPEND STANDARD_CONF --extra-version=kodi-${FFMPEG_VER}
                           --disable-ffplay
                           --disable-ffmpeg
                           --disable-ffprobe
+                          --disable-muxer=whip
                           --enable-gpl
                           --enable-runtime-cpudetect
-                          --enable-postproc
                           --enable-muxer=spdif
                           --enable-muxer=adts
                           --enable-muxer=asf
@@ -36,13 +36,19 @@ list(APPEND STANDARD_CONF --extra-version=kodi-${FFMPEG_VER}
                           --enable-demuxer=dash
                           --enable-libxml2
                           --enable-zlib
-                          --enable-static)
+                          --enable-static
+                          --disable-shared)
 
 # Determinate debug or release and set ffmpeg for
 if(CMAKE_BUILD_TYPE STREQUAL Release)
   list(APPEND EXTRA_CONF --disable-debug)
 else()
   list(APPEND EXTRA_CONF --enable-debug)
+endif()
+
+# Keep the Android Vulkan build disabled, consistent with Kodi dependencies.
+if (CORE_SYSTEM_NAME STREQUAL android)
+  list(APPEND EXTRA_CONF --disable-vulkan)
 endif()
 
 # Run the builds
@@ -100,6 +106,8 @@ if(NOT WIN32)
       list(APPEND EXTRA_CONF --cpu=cortex-a53 --arch=aarch64)
     elseif(CPU MATCHES arm)
       list(APPEND EXTRA_CONF --cpu=cortex-a9)
+    elseif(CPU MATCHES x86_64)
+      list(APPEND EXTRA_CONF --cpu=x86-64)
     else()
       list(APPEND EXTRA_CONF --cpu=i686 --disable-mmx)
     endif()
@@ -108,14 +116,13 @@ if(NOT WIN32)
     if(NOT CPU MATCHES arm64)
       list(APPEND EXTRA_CONF --cpu=cortex-a8)
     else()
-      list(APPEND EXTRA_CONF "--as=${CMAKE_INSTALL_PREFIX}/bin/gas-preprocessor.pl -arch aarch64 -- ${CMAKE_C_COMPILER}")
       list(APPEND EXTRA_CONF --arch=aarch64)
       list(APPEND EXTRA_CONF --disable-filter=yadif_videotoolbox)
     endif()
-    list(APPEND EXTRA_CONF --disable-decoder=mpeg_xvmc --disable-crystalhd --enable-videotoolbox
+    list(APPEND EXTRA_CONF --enable-videotoolbox
                            --target-os=darwin)
   elseif(CORE_SYSTEM_NAME STREQUAL osx)
-    list(APPEND EXTRA_CONF --disable-decoder=mpeg_xvmc --disable-crystalhd --enable-videotoolbox
+    list(APPEND EXTRA_CONF --enable-videotoolbox
                            --target-os=darwin
                            --disable-securetransport)
   endif()
@@ -134,18 +141,14 @@ if(NOT WIN32)
                       CONFIGURE_COMMAND PKG_CONFIG_PATH=${CMAKE_INSTALL_PREFIX}/lib/pkgconfig ${CMAKE_SOURCE_DIR}/configure
                         --prefix=${CMAKE_INSTALL_PREFIX}
                         --enable-pthreads
-                        --enable-gnutls
+                        --enable-openssl
+                        --disable-gnutls
+                        --enable-version3
                         --enable-libzvbi
                         ${STANDARD_CONF}
                         ${EXTRA_CONF})
 
-  if(CORE_SYSTEM_NAME STREQUAL darwin_embedded)
-    externalproject_add_step(ffmpeg
-                            RunSedCommand
-                            COMMAND echo "Setting HAVE_CLOCK_GETTIME to 0 for darwin_embedded using sed"
-                            COMMAND sed -i -- "s/HAVE_CLOCK_GETTIME 1/HAVE_CLOCK_GETTIME 0/g" ${CMAKE_CURRENT_BINARY_DIR}/ffmpeg-prefix/src/ffmpeg-build/config.h
-                            DEPENDEES configure)
-  endif()
+
 else()
   find_package(MinGW REQUIRED)
 
@@ -207,7 +210,7 @@ else()
     list(APPEND EXTRA_CONF --target-os=win32 --cpu=armv7)
   elseif(_ARM64_)
     set(EXTRA_ARCH "aarch64")
-    list(APPEND EXTRA_CONF --target-os=win32 --cpu=aarch64)
+    list(APPEND EXTRA_CONF --target-os=win32 --enable-cross-compile)
   else()
     message(FATAL_ERROR "Unsupported architecture")
   endif()

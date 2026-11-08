@@ -25,6 +25,7 @@
 #include <kodi/tools/StringUtils.h>
 
 using namespace kodi::tools;
+using namespace ffmpegdirect;
 //using namespace ADDON;
 
 namespace

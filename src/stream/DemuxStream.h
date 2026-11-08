@@ -80,8 +80,8 @@ public:
     dvdNavId = 0;
     demuxerId = -1;
     codec_fourcc = 0;
-    profile = FF_PROFILE_UNKNOWN;
-    level = FF_LEVEL_UNKNOWN;
+    profile = AV_PROFILE_UNKNOWN;
+    level = AV_LEVEL_UNKNOWN;
     type = INPUTSTREAM_TYPE_NONE;
     iDuration = 0;
     pPrivate = NULL;
@@ -95,6 +95,7 @@ public:
 
   virtual std::string GetStreamName();
   virtual bool GetInformation(kodi::addon::InputstreamInfo& info);
+  virtual STREAMCODEC_PROFILE ConvertToInputStreamProfile(AVCodecID codec, int profile);
 
   int uniqueId; // unique stream id
   int dvdNavId;

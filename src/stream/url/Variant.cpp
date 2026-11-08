@@ -11,6 +11,8 @@
 #include <string.h>
 #include <utility>
 
+using namespace ffmpegdirect;
+
 #ifndef strtoll
 #ifdef TARGET_WINDOWS
 #define strtoll  _strtoi64

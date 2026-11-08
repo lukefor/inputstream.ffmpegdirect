@@ -5,7 +5,7 @@
 msgid ""
 msgstr ""
 "Report-Msgid-Bugs-To: translations@kodi.tv\n"
-"PO-Revision-Date: 2021-07-22 22:29+0000\n"
+"PO-Revision-Date: 2026-02-26 17:22+0000\n"
 "Last-Translator: Marek Adamski <fevbew@wp.pl>\n"
 "Language-Team: Polish <https://kodi.weblate.cloud/projects/kodi-add-ons-videoplayer-inputstream/inputstream-ffmpegdirect/pl_pl/>\n"
 "Language: pl_pl\n"
@@ -13,7 +13,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=3; plural=n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2;\n"
-"X-Generator: Weblate 4.7.2\n"
+"X-Generator: Weblate 5.16.1\n"
 
 msgctxt "Addon Summary"
 msgid "InputStream Client for FFmpeg streams (libavformat)"
@@ -133,6 +133,11 @@ msgctxt "#30046"
 msgid "For catchup streams report stream is not realtime"
 msgstr "W przypadku strumieni powtórkowych raportuj, że nie jest strumieniem czasu rzeczywistego"
 
+#. help: Advanced - disableStrictHLSfileExtensionCheck
+msgctxt "#30047"
+msgid "Disable strict HLS file extension check"
+msgstr "Wyłącz rygorystyczną kontrolę rozszerzeń plików HLS"
+
 # empty strings from id 30047 to 30599
 #. ############
 #. help info #
@@ -226,3 +231,12 @@ msgstr "Strumienie, które mają plik manifestu (np. HLD/DASH/Smooth Streaming),
 msgctxt "#30645"
 msgid "For certain catchup streams such as HLS reporting that a live stream is not live can improve stream open times. If testing this option works for a catchup stream/provider, then add a [I]\"#KODIPROP=inputstream.ffmpegdirect.is_realtime_stream=false\"[/I] to the M3U entry in question. This setting should not be left enabled for all streams."
 msgstr "W przypadku niektórych strumieni powtórkowych, takich jak HLS, które zgłaszają, że strumień na żywo nie jest na żywo, może poprawić czas otwarcia strumienia. Jeśli testowanie tej opcji działa dla strumienia/dostawcy powtórkowego, dodaj [I]\"#KODIPROP=inputstream.ffmpegdirect.is_realtime_stream=false\"[/I] do danego wpisu M3U. To ustawienie nie powinno być włączone dla wszystkich strumieni."
+
+#. help: Advanced - disableStrictHLSfileExtensionCheck
+msgctxt "#30646"
+msgid "Allows playing HLS streams without file extension or with unsupported file extension. This lowers the security requirements in ffmpeg."
+msgstr "Umożliwia odtwarzanie strumieni HLS bez rozszerzenia pliku lub z nieobsługiwanym rozszerzeniem pliku. Obniża to wymagania bezpieczeństwa w ffmpeg."
+
+#~ msgctxt "#30646"
+#~ msgid "Allows playing HLS streams without file extension or with unsuported file extension. This lowers the security requirements in ffmpeg."
+#~ msgstr "Umożliwia odtwarzanie strumieni HLS bez rozszerzenia pliku lub z nieobsługiwanym rozszerzeniem pliku. Obniża to wymagania bezpieczeństwa w ffmpeg."

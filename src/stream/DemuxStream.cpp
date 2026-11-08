@@ -46,7 +46,7 @@ bool DemuxStream::GetInformation(kodi::addon::InputstreamInfo& info)
   info.SetFlags(flags);
   info.SetName(name);
   info.SetCodecName(codecName);
-  info.SetCodecProfile(static_cast<STREAMCODEC_PROFILE>(profile));
+  info.SetCodecProfile(ConvertToInputStreamProfile(codec, profile));
   info.SetPhysicalIndex(uniqueId);
   info.SetExtraData(extraData.GetData(), extraData.GetSize());
   info.SetLanguage(language);
@@ -58,6 +58,42 @@ bool DemuxStream::GetInformation(kodi::addon::InputstreamInfo& info)
   }
 
   return true;
+}
+
+STREAMCODEC_PROFILE DemuxStream::ConvertToInputStreamProfile(AVCodecID codec, int profile)
+{
+  // https://github.com/xbmc/xbmc/blob/1dbab77181398ce816ea81d17d5159288fb97814/xbmc/addons/kodi-dev-kit/include/kodi/c-api/addon-instance/inputstream/stream_codec.h#L24
+  // https://github.com/xbmc/xbmc/blob/1dbab77181398ce816ea81d17d5159288fb97814/xbmc/cores/VideoPlayer/DVDInputStreams/InputStreamAddon.cpp#L760
+  switch (codec) {
+    case AV_CODEC_ID_AAC:
+      [[fallthrough]];
+    case AV_CODEC_ID_AAC_LATM:
+      switch (profile) {
+        case AV_PROFILE_AAC_MAIN:
+          return AACCodecProfileMAIN;
+        case AV_PROFILE_AAC_LOW:
+          return AACCodecProfileLOW;
+        case AV_PROFILE_AAC_SSR:
+          return AACCodecProfileSSR;
+        case AV_PROFILE_AAC_LTP:
+          return AACCodecProfileLTP;
+        case AV_PROFILE_AAC_HE:
+          return AACCodecProfileHE;
+        case AV_PROFILE_AAC_HE_V2:
+          return AACCodecProfileHEV2;
+        case AV_PROFILE_AAC_LD:
+          return AACCodecProfileLD;
+        case AV_PROFILE_AAC_ELD:
+          return AACCodecProfileELD;
+      }
+
+      break;
+    default:
+    	break;
+  }
+
+  // for everything else leave original profile
+  return static_cast<STREAMCODEC_PROFILE>(profile);
 }
 
 bool DemuxStreamVideoFFmpeg::GetInformation(kodi::addon::InputstreamInfo& info)

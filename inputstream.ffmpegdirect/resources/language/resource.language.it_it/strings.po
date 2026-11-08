@@ -5,7 +5,7 @@
 msgid ""
 msgstr ""
 "Report-Msgid-Bugs-To: translations@kodi.tv\n"
-"PO-Revision-Date: 2023-04-17 00:16+0000\n"
+"PO-Revision-Date: 2026-03-04 12:13+0000\n"
 "Last-Translator: Massimo Pissarello <mapi68@gmail.com>\n"
 "Language-Team: Italian <https://kodi.weblate.cloud/projects/kodi-add-ons-videoplayer-inputstream/inputstream-ffmpegdirect/it_it/>\n"
 "Language: it_it\n"
@@ -13,7 +13,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=n != 1;\n"
-"X-Generator: Weblate 4.15.2\n"
+"X-Generator: Weblate 5.16.1\n"
 
 msgctxt "Addon Summary"
 msgid "InputStream Client for FFmpeg streams (libavformat)"
@@ -133,6 +133,11 @@ msgctxt "#30046"
 msgid "For catchup streams report stream is not realtime"
 msgstr "Per gli stream di recupero, lo stream del rapporto non è in tempo reale"
 
+#. help: Advanced - disableStrictHLSfileExtensionCheck
+msgctxt "#30047"
+msgid "Disable strict HLS file extension check"
+msgstr "Disabilita controllo rigoroso dell'estensione del file HLS"
+
 # empty strings from id 30047 to 30599
 #. ############
 #. help info #
@@ -226,3 +231,12 @@ msgstr "Gli stream che hanno un file manifest (ad es. HLD/DASH/Smooth Streaming)
 msgctxt "#30645"
 msgid "For certain catchup streams such as HLS reporting that a live stream is not live can improve stream open times. If testing this option works for a catchup stream/provider, then add a [I]\"#KODIPROP=inputstream.ffmpegdirect.is_realtime_stream=false\"[/I] to the M3U entry in question. This setting should not be left enabled for all streams."
 msgstr "Per alcuni stream con recupero come HLS, la segnalazione di uno stream live anche se non è in diretta può migliorare i tempi di apertura dello stream. Se questa opzione funziona per uno stream o provider con recupero, aggiungi [I]\"#KODIPROP=inputstream.ffmpegdirect.is_realtime_stream=false\"[/I] alla voce M3U in questione. Questa impostazione non deve essere lasciata abilitata per tutti gli stream."
+
+#. help: Advanced - disableStrictHLSfileExtensionCheck
+msgctxt "#30646"
+msgid "Allows playing HLS streams without file extension or with unsupported file extension. This lowers the security requirements in ffmpeg."
+msgstr "Consente la riproduzione di flussi HLS senza estensione di file o con estensione non supportata. Questo riduce i requisiti di sicurezza in ffmpeg."
+
+#~ msgctxt "#30646"
+#~ msgid "Allows playing HLS streams without file extension or with unsuported file extension. This lowers the security requirements in ffmpeg."
+#~ msgstr "Consente la riproduzione di flussi HLS senza estensione di file o con estensione non supportata. Questo riduce i requisiti di sicurezza in ffmpeg."

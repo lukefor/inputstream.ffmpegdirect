@@ -5,7 +5,12 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR})
 
 find_package(PkgConfig)
 if(WIN32)
-  find_package(LibXml2 REQUIRED)
+  find_package(libxml2 CONFIG QUIET)
+  if(TARGET LibXml2::LibXml2)
+    set(LIBXML2_LIBRARIES LibXml2::LibXml2)
+  else()
+    find_package(LibXml2 REQUIRED)
+  endif()
   find_package(Iconv REQUIRED)
   find_package(OpenSSL REQUIRED)
 endif()
@@ -70,7 +75,8 @@ list(APPEND DEPLIBS ${ZLIB_LIBRARIES}
 if(WIN32)
   # Windows does need to know about FFMPEG_LIBRARIES here
   list(APPEND DEPLIBS ${ICONV_LIBRARIES}
-                      ${OPENSSL_LIBRARIES}
+                      OpenSSL::SSL
+                      OpenSSL::Crypto
                       ${LIBXML2_LIBRARIES}
                       ${FFMPEG_LIBRARIES}
                       Winmm.lib
@@ -112,6 +118,12 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
 endif()
 # Now remove ';''s for all platforms and allow CMake to add them back
 string(REGEX REPLACE ";" " " FFMPEG_LDFLAGS "${FFMPEG_LDFLAGS}")
+if(NOT WIN32 AND NOT APPLE)
+  # Keep the symbols of the statically linked FFmpeg, OpenSSL etc. private to the addon.
+  # Kodi itself is linked against its own (usually different) FFmpeg and OpenSSL, exporting
+  # ours would let the dynamic linker bind the addon's calls to Kodi's libraries instead.
+  string(APPEND FFMPEG_LDFLAGS " -Wl,--exclude-libs,ALL")
+endif()
 set_target_properties(inputstream.ffmpegdirect PROPERTIES LINK_FLAGS "${FFMPEG_LDFLAGS}")
 
 if(CORE_SYSTEM_NAME STREQUAL windowsstore)

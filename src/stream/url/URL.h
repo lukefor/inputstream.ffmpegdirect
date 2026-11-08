@@ -16,6 +16,8 @@
 #undef SetPort // WIN32INCLUDES this is defined as SetPortA in WinSpool.h which is being included _somewhere_
 #endif
 
+namespace ffmpegdirect
+{
 class CURL
 {
 public:
@@ -199,3 +201,4 @@ protected:
   CUrlOptions m_options;
   CUrlOptions m_protocolOptions;
 };
+} // namespace ffmpegdirect

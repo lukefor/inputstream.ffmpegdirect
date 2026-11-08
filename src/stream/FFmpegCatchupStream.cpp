@@ -8,6 +8,7 @@
 #include "FFmpegCatchupStream.h"
 
 #include "CurlCatchupInput.h"
+#include "IManageDemuxPacket.h"
 #include "url/URL.h"
 #include "../utils/Log.h"
 
@@ -81,6 +82,9 @@ bool FFmpegCatchupStream::Open(const std::string& streamUrl, const std::string& 
 
 bool FFmpegCatchupStream::DemuxSeekTime(double timeMs, bool backwards, double& startpts)
 {
+  const bool continuationSeek = m_continuationSeek;
+  m_continuationSeek = false;
+
   if (/*!m_pInput ||*/ timeMs < 0)
     return false;
 
@@ -90,6 +94,13 @@ bool FFmpegCatchupStream::DemuxSeekTime(double timeMs, bool backwards, double& s
     {
       std::lock_guard<std::recursive_mutex> lock(m_mutex);
       m_seekOffset = seekResult;
+
+      if (continuationSeek && !m_lastSeekWasLive)
+        m_continuationTimestamps = m_lastDemuxTimestamps;
+      else
+        m_continuationTimestamps.clear();
+      m_lastDemuxTimestamps.clear();
+      m_continuationDroppedPackets = 0;
     }
 
     Log(LOGLEVEL_DEBUG, "%s - Seek successful. m_seekOffset = %f, m_currentPts = %f, time = %f, backwards = %d, startpts = %f",
@@ -115,17 +126,49 @@ DEMUX_PACKET* FFmpegCatchupStream::DemuxRead()
   if (pPacket)
   {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    pPacket->pts += m_seekOffset;
-    pPacket->dts += m_seekOffset;
+    // Only shift real timestamps, adding the offset to STREAM_NOPTS_VALUE (e.g. for the
+    // empty packets returned on timeouts) produces a bogus time which then ends up in
+    // m_currentDemuxTime and breaks continuing the stream on EOF or after a pause.
+    if (pPacket->pts != STREAM_NOPTS_VALUE)
+      pPacket->pts += m_seekOffset;
+    if (pPacket->dts != STREAM_NOPTS_VALUE)
+      pPacket->dts += m_seekOffset;
+
+    if (pPacket->iSize > 0 && pPacket->iStreamId >= 0)
+    {
+      const double ts = pPacket->dts != STREAM_NOPTS_VALUE ? pPacket->dts : pPacket->pts;
+      if (ts != STREAM_NOPTS_VALUE)
+      {
+        auto it = m_continuationTimestamps.find(pPacket->iStreamId);
+        if (it != m_continuationTimestamps.end())
+        {
+          if (ts <= it->second)
+          {
+            // Overlap with data already delivered before the stream was continued
+            m_demuxPacketManager->FreeDemuxPacketFromInputStreamAPI(pPacket);
+            m_continuationDroppedPackets++;
+            return m_demuxPacketManager->AllocateDemuxPacketFromInputStreamAPI(0);
+          }
+
+          m_continuationTimestamps.erase(it);
+          if (m_continuationTimestamps.empty())
+            Log(LOGLEVEL_INFO, "%s - Continued stream caught up with previous position, dropped %d overlapping packets", __FUNCTION__, m_continuationDroppedPackets);
+        }
+
+        m_lastDemuxTimestamps[pPacket->iStreamId] = ts;
+      }
+    }
 
     if (m_lastPacketResult == AVERROR_EOF && m_catchupTerminates && !m_isOpeningStream && !m_lastSeekWasLive)
     {
       if (!m_lastPacketWasAvoidedEOF)
       {
-        Log(LOGLEVEL_INFO, "%s - EOF detected on terminating catchup stream, starting continuing stream at offset: %lld, ending offset approx %lld", __FUNCTION__, m_previousLiveBufferOffset, static_cast<long long>(std::time(nullptr) - m_catchupBufferStartTime));
+        long long currentDemuxSecs = static_cast<long long>(m_currentDemuxTime) / 1000;
+        Log(LOGLEVEL_INFO, "%s - EOF detected on terminating catchup stream, starting continuing stream at offset: %lld, ending offset approx %lld", __FUNCTION__, currentDemuxSecs, static_cast<long long>(std::time(nullptr) - m_catchupBufferStartTime));
 
         m_seekCorrectsEOF = true;
-        DemuxSeekTime(m_previousLiveBufferOffset * 1000);
+        m_continuationSeek = true;
+        DemuxSeekTime(m_currentDemuxTime);
         m_seekCorrectsEOF = false;
       }
       m_lastPacketWasAvoidedEOF = true;
@@ -135,7 +178,8 @@ DEMUX_PACKET* FFmpegCatchupStream::DemuxRead()
       m_lastPacketWasAvoidedEOF = false;
     }
 
-    m_currentDemuxTime = static_cast<double>(pPacket->pts) / 1000;
+    if (pPacket->pts != STREAM_NOPTS_VALUE)
+      m_currentDemuxTime = static_cast<double>(pPacket->pts) / 1000;
   }
 
   return pPacket;
@@ -168,6 +212,7 @@ void FFmpegCatchupStream::DemuxSetSpeed(int speed)
     // Resume Playback
     Log(LOGLEVEL_DEBUG, "%s - DemuxSetSpeed - Unpause time: %lld", __FUNCTION__, static_cast<long long>(m_pauseStartTime));
     m_lastSeekWasLive = false;
+    m_continuationSeek = true;
     DemuxSeekTime(m_pauseStartTime);
   }
   else if (!IsPaused() && speed == STREAM_PLAYSPEED_PAUSE)
@@ -255,6 +300,19 @@ int64_t FFmpegCatchupStream::SeekCatchupStream(double timeMs, bool backwards)
       {
         if (!TargetDistanceFromLiveSupported(liveBufferOffset - seekBufferOffset)) // terminating streams only
           return -1;
+
+        if (m_catchupGranularity > 1 && 3600 % m_catchupGranularity == 0)
+        {
+          // Catchup URLs with a granularity of more than a second (usually minutes) start at
+          // the beginning of the period, not at the requested second. Use the real start so the
+          // timestamps we report match the content instead of being ahead by up to a minute.
+          const long long remainder = (static_cast<long long>(m_catchupBufferStartTime) + seekBufferOffset - m_timezoneShift) % m_catchupGranularity;
+          if (remainder > 0)
+          {
+            Log(LOGLEVEL_DEBUG, "%s - Aligning seek offset %lld to granularity of %d seconds (-%lld seconds)", __FUNCTION__, static_cast<long long>(seekBufferOffset), m_catchupGranularity, remainder);
+            seekBufferOffset -= remainder;
+          }
+        }
 
         Log(LOGLEVEL_INFO, "%s - Seek to catchup", __FUNCTION__);
         m_catchupBufferOffset = seekBufferOffset;

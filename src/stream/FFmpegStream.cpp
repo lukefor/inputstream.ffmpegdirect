@@ -272,6 +272,12 @@ void FFmpegStream::DemuxAbort()
 
 void FFmpegStream::DemuxFlush()
 {
+  FlushDemuxer();
+  ResetReplayDetection();
+}
+
+void FFmpegStream::FlushDemuxer()
+{
   if (m_pFormatContext)
   {
     if (m_pFormatContext->pb)
@@ -331,7 +337,7 @@ DEMUX_PACKET* FFmpegStream::DemuxRead()
     }
     else if (m_pkt.result < 0)
     {
-      DemuxFlush();
+      FlushDemuxer();
     }
     // check size and stream index for being in a valid range
     else if (m_pkt.pkt.size < 0 ||
@@ -343,7 +349,7 @@ DEMUX_PACKET* FFmpegStream::DemuxRead()
       {
         Log(LOGLEVEL_ERROR, "CDVDDemuxFFmpeg::Read() no valid packet");
         bReturnEmpty = true;
-        DemuxFlush();
+        FlushDemuxer();
       }
       else
         Log(LOGLEVEL_ERROR, "CDVDDemuxFFmpeg::Read() returned invalid packet and eof reached");
@@ -371,7 +377,11 @@ DEMUX_PACKET* FFmpegStream::DemuxRead()
 
       AVStream* stream = m_pFormatContext->streams[m_pkt.pkt.stream_index];
 
-      if (IsTransportStreamReady())
+      if (m_isRealTimeStream && IsReplayedLivePacket(m_pkt.pkt, stream))
+      {
+        bReturnEmpty = true;
+      }
+      else if (IsTransportStreamReady())
       {
         if (m_program != UINT_MAX)
         {
@@ -675,8 +685,9 @@ bool FFmpegStream::Open(bool fileinfo)
 {
   const AVInputFormat* iformat = nullptr;
   std::string strFile;
-  m_streaminfo = !m_isRealTimeStream && !m_reopen;;
+  m_streaminfo = !m_isRealTimeStream && !m_reopen;
   m_currentPts = STREAM_NOPTS_VALUE;
+  ResetReplayDetection();
   m_speed = STREAM_PLAYSPEED_NORMAL;
   m_program = UINT_MAX;
   m_seekToKeyFrame = false;
@@ -1012,74 +1023,7 @@ bool FFmpegStream::OpenWithCURL(const AVInputFormat* iformat)
   if (iformat == nullptr)
   {
     // let ffmpeg decide which demuxer we have to open
-    bool trySPDIFonly = (m_curlInput->GetContent() == "audio/x-spdif-compressed");
-
-    if (!trySPDIFonly)
-      av_probe_input_buffer(m_ioContext, &iformat, strFile.c_str(), NULL, 0, 0);
-
-    // Use the more low-level code in case we have been built against an old
-    // FFmpeg without the above av_probe_input_buffer(), or in case we only
-    // want to probe for spdif (DTS or IEC 61937) compressed audio
-    // specifically, or in case the file is a wav which may contain DTS or
-    // IEC 61937 (e.g. ac3-in-wav) and we want to check for those formats.
-    if (trySPDIFonly || (iformat && strcmp(iformat->name, "wav") == 0))
-    {
-      AVProbeData pd;
-      int probeBufferSize = 32768;
-      std::unique_ptr<uint8_t[]> probe_buffer (new uint8_t[probeBufferSize + AVPROBE_PADDING_SIZE]);
-
-      // init probe data
-      pd.buf = probe_buffer.get();
-      pd.filename = strFile.c_str();
-
-      // read data using avformat's buffers
-      pd.buf_size = avio_read(m_ioContext, pd.buf, probeBufferSize);
-      if (pd.buf_size <= 0)
-      {
-        Log(LOGLEVEL_ERROR, "%s - error reading from input stream, %s", __FUNCTION__, CURL::GetRedacted(strFile).c_str());
-        return false;
-      }
-      memset(pd.buf + pd.buf_size, 0, AVPROBE_PADDING_SIZE);
-
-      // restore position again
-      avio_seek(m_ioContext , 0, SEEK_SET);
-
-      // the advancedsetting is for allowing the user to force outputting the
-      // 44.1 kHz DTS wav file as PCM, so that an A/V receiver can decode
-      // it (this is temporary until we handle 44.1 kHz passthrough properly)
-      if (trySPDIFonly || (iformat && strcmp(iformat->name, "wav") == 0)) // && !CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_VideoPlayerIgnoreDTSinWAV))
-      {
-        // check for spdif and dts
-        // This is used with wav files and audio CDs that may contain
-        // a DTS or AC3 track padded for S/PDIF playback. If neither of those
-        // is present, we assume it is PCM audio.
-        // AC3 is always wrapped in iec61937 (ffmpeg "spdif"), while DTS
-        // may be just padded.
-        const AVInputFormat* iformat2 = av_find_input_format("spdif");
-
-        if (iformat2 && iformat2->read_probe(&pd) > AVPROBE_SCORE_MAX / 4)
-        {
-          iformat = iformat2;
-        }
-        else
-        {
-          // not spdif or no spdif demuxer, try dts
-          iformat2 = av_find_input_format("dts");
-
-          if (iformat2 && iformat2->read_probe(&pd) > AVPROBE_SCORE_MAX / 4)
-          {
-            iformat = iformat2;
-          }
-          else if (trySPDIFonly)
-          {
-            // not dts either, return false in case we were explicitly
-            // requested to only check for S/PDIF padded compressed audio
-            Log(LOGLEVEL_DEBUG, "%s - not spdif or dts file, falling back", __FUNCTION__);
-            return false;
-          }
-        }
-      }
-    }
+    av_probe_input_buffer(m_ioContext, &iformat, strFile.c_str(), NULL, 0, 0);
 
     if (!iformat)
     {
@@ -1156,6 +1100,89 @@ void FFmpegStream::ResetVideoStreams()
 
 void FFmpegStream::CurrentPTSUpdated()
 {
+}
+
+void FFmpegStream::ResetReplayDetection()
+{
+  m_replayGuards.clear();
+}
+
+bool FFmpegStream::IsReplayedLivePacket(const AVPacket& pkt, const AVStream* stream)
+{
+  // Some live sources (typically IPTV restream servers sending MPEG-TS over HTTP) start
+  // a new connection with the content of their buffer, which can be 10-30 seconds old.
+  // When the connection drops and is transparently re-established (by Kodi's curl
+  // reconnect or FFmpeg's http reconnect) the demuxer simply sees the timestamps jump
+  // back to data which has already been delivered and the player shows it again.
+  // Detect this by remembering the timestamps already delivered for each audio/video
+  // stream and dropping packets which go back to one of them. A backwards jump to
+  // timestamps never seen before is a genuine discontinuity and is passed through.
+
+  if (!stream || !stream->codecpar ||
+      (stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO &&
+       stream->codecpar->codec_type != AVMEDIA_TYPE_AUDIO))
+    return false;
+
+  ReplayGuard& guard = m_replayGuards[pkt.stream_index];
+
+  const int64_t ts = pkt.dts != AV_NOPTS_VALUE ? pkt.dts : pkt.pts;
+  if (ts == AV_NOPTS_VALUE)
+    return guard.skipping;
+
+  auto remember = [&guard](int64_t value) {
+    if (guard.deliveredTs.insert(value).second)
+    {
+      guard.deliveredOrder.push_back(value);
+      if (guard.deliveredOrder.size() > REPLAY_GUARD_HISTORY_SIZE)
+      {
+        guard.deliveredTs.erase(guard.deliveredOrder.front());
+        guard.deliveredOrder.pop_front();
+      }
+    }
+  };
+
+  if (guard.highWaterTs == AV_NOPTS_VALUE || ts > guard.highWaterTs)
+  {
+    if (guard.skipping)
+    {
+      Log(LOGLEVEL_INFO, "%s - Stream %d: caught up with previously delivered data, dropped %d replayed packets",
+          __FUNCTION__, pkt.stream_index, guard.droppedPackets);
+      guard.skipping = false;
+    }
+    guard.highWaterTs = ts;
+    remember(ts);
+    return false;
+  }
+
+  const int64_t oneSecond = av_rescale_q(AV_TIME_BASE, AV_TIME_BASE_Q, stream->time_base);
+  const bool largeJumpBack = guard.highWaterTs - ts >= oneSecond;
+
+  if (guard.deliveredTs.count(ts) > 0 && (guard.skipping || largeJumpBack))
+  {
+    if (!guard.skipping)
+    {
+      Log(LOGLEVEL_WARNING, "%s - Stream %d: source jumped back %.2f seconds to data already delivered (reconnect?), dropping replayed packets",
+          __FUNCTION__, pkt.stream_index, static_cast<double>(guard.highWaterTs - ts) * av_q2d(stream->time_base));
+      guard.skipping = true;
+      guard.droppedPackets = 0;
+    }
+    guard.droppedPackets++;
+    return true;
+  }
+
+  if (largeJumpBack)
+  {
+    // Timestamps we have never delivered, this is a real discontinuity, follow the new timeline
+    Log(LOGLEVEL_INFO, "%s - Stream %d: timestamp discontinuity of -%.2f seconds to new data, following new timeline",
+        __FUNCTION__, pkt.stream_index, static_cast<double>(guard.highWaterTs - ts) * av_q2d(stream->time_base));
+    guard.skipping = false;
+    guard.deliveredTs.clear();
+    guard.deliveredOrder.clear();
+    guard.highWaterTs = ts;
+    remember(ts);
+  }
+
+  return false;
 }
 
 double FFmpegStream::ConvertTimestamp(int64_t pts, int den, int num)
@@ -1535,7 +1562,9 @@ bool FFmpegStream::SeekTime(double time, bool backwards, double* startpts)
 
     if (ret >= 0)
     {
-      if (m_pFormatContext->iformat->read_seek)
+      ResetReplayDetection();
+
+      if (!(m_pFormatContext->iformat->flags & AVFMT_NOTIMESTAMPS))
         m_seekToKeyFrame = true;
 
         m_currentPts = STREAM_NOPTS_VALUE;
@@ -1582,7 +1611,7 @@ bool FFmpegStream::SeekTime(double time, bool backwards, double* startpts)
 
 FFmpegExtraData FFmpegStream::GetPacketExtradata(const AVPacket* pkt, const AVCodecParameters* codecPar)
 {
-  constexpr int FF_MAX_EXTRADATA_SIZE = ((1 << 28) - AV_INPUT_BUFFER_PADDING_SIZE);
+  constexpr int AV_MAX_EXTRADATA_SIZE = ((1 << 28) - AV_INPUT_BUFFER_PADDING_SIZE);
 
   if (!pkt)
     return {};
@@ -1675,7 +1704,7 @@ FFmpegExtraData FFmpegStream::GetPacketExtradata(const AVPacket* pkt, const AVCo
     size_t retExtraDataSize = 0;
     uint8_t* retExtraData =
         av_packet_get_side_data(pktRef, AV_PKT_DATA_NEW_EXTRADATA, &retExtraDataSize);
-    if (retExtraData && retExtraDataSize > 0 && retExtraDataSize < FF_MAX_EXTRADATA_SIZE)
+    if (retExtraData && retExtraDataSize > 0 && retExtraDataSize < AV_MAX_EXTRADATA_SIZE)
     {
       try
       {
@@ -1736,6 +1765,7 @@ void FFmpegStream::ParsePacket(AVPacket* pkt)
 
     if (parser->second->m_parserCtx &&
         parser->second->m_parserCtx->parser &&
+        parser->second->m_codecCtx &&
         !st->codecpar->extradata)
     {
       FFmpegExtraData retExtraData = GetPacketExtradata(pkt, st->codecpar);
@@ -1744,29 +1774,31 @@ void FFmpegStream::ParsePacket(AVPacket* pkt)
         st->codecpar->extradata_size = retExtraData.GetSize();
         st->codecpar->extradata = retExtraData.TakeData();
 
-        if (parser->second->m_parserCtx->parser->parser_parse)
-        {
-          parser->second->m_codecCtx->extradata = st->codecpar->extradata;
-          parser->second->m_codecCtx->extradata_size = st->codecpar->extradata_size;
-          const uint8_t* outbufptr;
-          int bufSize;
-          parser->second->m_parserCtx->flags |= PARSER_FLAG_COMPLETE_FRAMES;
-          parser->second->m_parserCtx->parser->parser_parse(parser->second->m_parserCtx,
-                                                            parser->second->m_codecCtx,
-                                                            &outbufptr, &bufSize,
-                                                            pkt->data, pkt->size);
-          parser->second->m_codecCtx->extradata = nullptr;
-          parser->second->m_codecCtx->extradata_size = 0;
+        parser->second->m_codecCtx->extradata = st->codecpar->extradata;
+        parser->second->m_codecCtx->extradata_size = st->codecpar->extradata_size;
+        uint8_t* outbufptr;
+        int bufSize;
+        parser->second->m_parserCtx->flags |= PARSER_FLAG_COMPLETE_FRAMES;
+        int ret = av_parser_parse2(parser->second->m_parserCtx, parser->second->m_codecCtx,
+                                   &outbufptr, &bufSize, pkt->data, pkt->size,
+                                   pkt->pts, pkt->dts, pkt->pos);
+        parser->second->m_codecCtx->extradata = nullptr;
+        parser->second->m_codecCtx->extradata_size = 0;
 
-          if (parser->second->m_parserCtx->width != 0)
-          {
-            st->codecpar->width = parser->second->m_parserCtx->width;
-            st->codecpar->height = parser->second->m_parserCtx->height;
-          }
-          else
-          {
-            Log(LOGLEVEL_ERROR, "CDVDDemuxFFmpeg::ParsePacket() invalid width/height");
-          }
+        if (ret < 0)
+        {
+          Log(LOGLEVEL_ERROR, "%s - error parsing packet: %d", __FUNCTION__, ret);
+          return;
+        }
+
+        if (parser->second->m_parserCtx->width != 0)
+        {
+          st->codecpar->width = parser->second->m_parserCtx->width;
+          st->codecpar->height = parser->second->m_parserCtx->height;
+        }
+        else
+        {
+          Log(LOGLEVEL_ERROR, "CDVDDemuxFFmpeg::ParsePacket() invalid width/height");
         }
       }
     }
@@ -2059,43 +2091,49 @@ DemuxStream* FFmpegStream::AddStream(int streamIdx)
         st->colorRange = pStream->codecpar->color_range;
         st->hdr_type = DetermineHdrType(pStream);
 
-        // https://github.com/FFmpeg/FFmpeg/blob/release/5.0/doc/APIchanges
-        size_t size = 0;
-        uint8_t* side_data = nullptr;
+        // https://github.com/FFmpeg/FFmpeg/blob/release/7.0/doc/APIchanges
+        const AVPacketSideData* sideData = nullptr;
 
         if (st->hdr_type == StreamHdrType::HDR_TYPE_DOLBYVISION)
         {
-          side_data = av_stream_get_side_data(pStream, AV_PKT_DATA_DOVI_CONF, &size);
-          if (side_data && size)
+
+          sideData =
+              av_packet_side_data_get(pStream->codecpar->coded_side_data,
+                                      pStream->codecpar->nb_coded_side_data, AV_PKT_DATA_DOVI_CONF);
+          if (sideData && sideData->size)
           {
-            st->dovi = *reinterpret_cast<AVDOVIDecoderConfigurationRecord*>(side_data);
+            st->dovi = *reinterpret_cast<const AVDOVIDecoderConfigurationRecord*>(sideData->data);
           }
         }
 
-        side_data = av_stream_get_side_data(pStream, AV_PKT_DATA_MASTERING_DISPLAY_METADATA, &size);
-        if (side_data && size)
+        sideData = av_packet_side_data_get(pStream->codecpar->coded_side_data,
+                                           pStream->codecpar->nb_coded_side_data,
+                                           AV_PKT_DATA_MASTERING_DISPLAY_METADATA);
+        if (sideData && sideData->size)
         {
           st->masteringMetaData = std::make_shared<AVMasteringDisplayMetadata>(
-              *reinterpret_cast<AVMasteringDisplayMetadata*>(side_data));
+              *reinterpret_cast<const AVMasteringDisplayMetadata*>(sideData->data));
         }
 
-        side_data = av_stream_get_side_data(pStream, AV_PKT_DATA_CONTENT_LIGHT_LEVEL, &size);
-        if (side_data && size)
+        sideData = av_packet_side_data_get(pStream->codecpar->coded_side_data,
+                                           pStream->codecpar->nb_coded_side_data,
+                                           AV_PKT_DATA_CONTENT_LIGHT_LEVEL);
+        if (sideData && sideData->size)
         {
           st->contentLightMetaData = std::make_shared<AVContentLightMetadata>(
-              *reinterpret_cast<AVContentLightMetadata*>(side_data));
+              *reinterpret_cast<const AVContentLightMetadata*>(sideData->data));
         }
 
-        AVDictionaryEntry* rtag = av_dict_get(pStream->metadata, "rotate", NULL, 0);
-        uint8_t* displayMatrixSideData =
-            av_stream_get_side_data(pStream, AV_PKT_DATA_DISPLAYMATRIX, nullptr);
-        if (displayMatrixSideData)
+        sideData = av_packet_side_data_get(pStream->codecpar->coded_side_data,
+                                           pStream->codecpar->nb_coded_side_data,
+                                           AV_PKT_DATA_DISPLAYMATRIX);
+        if (sideData)
         {
-          const double tetha =
-              av_display_rotation_get(reinterpret_cast<int32_t*>(displayMatrixSideData));
-          if (!std::isnan(tetha))
+          const double theta =
+              av_display_rotation_get(reinterpret_cast<const int32_t*>(sideData->data));
+          if (!std::isnan(theta))
           {
-            st->iOrientation = ((static_cast<int>(-tetha) % 360) + 360) % 360;
+            st->iOrientation = ((static_cast<int>(-theta) % 360) + 360) % 360;
           }
         }
 
@@ -2271,7 +2309,9 @@ StreamHdrType FFmpegStream::DetermineHdrType(AVStream* pStream)
 {
   StreamHdrType hdrType = StreamHdrType::HDR_TYPE_NONE;
 
-  if (av_stream_get_side_data(pStream, AV_PKT_DATA_DOVI_CONF, nullptr)) // DoVi
+  if (av_packet_side_data_get(pStream->codecpar->coded_side_data,
+                              pStream->codecpar->nb_coded_side_data,
+                              AV_PKT_DATA_DOVI_CONF)) // DoVi
     hdrType = StreamHdrType::HDR_TYPE_DOLBYVISION;
   else if (pStream->codecpar->color_trc == AVCOL_TRC_SMPTE2084) // HDR10
     hdrType = StreamHdrType::HDR_TYPE_HDR10;
@@ -2279,7 +2319,9 @@ StreamHdrType FFmpegStream::DetermineHdrType(AVStream* pStream)
     hdrType = StreamHdrType::HDR_TYPE_HLG;
   // file could be SMPTE2086 which FFmpeg currently returns as unknown
   // so use the presence of static metadata to detect it
-  else if (av_stream_get_side_data(pStream, AV_PKT_DATA_MASTERING_DISPLAY_METADATA, nullptr))
+  else if (av_packet_side_data_get(pStream->codecpar->coded_side_data,
+                                   pStream->codecpar->nb_coded_side_data,
+                                   AV_PKT_DATA_MASTERING_DISPLAY_METADATA))
     hdrType = StreamHdrType::HDR_TYPE_HDR10;
 
   return hdrType;
@@ -2317,9 +2359,9 @@ std::string FFmpegStream::GetStreamCodecName(int iStreamId)
     /* use profile to determine the DTS type */
     if (stream->codec == AV_CODEC_ID_DTS)
     {
-      if (stream->profile == FF_PROFILE_DTS_HD_MA)
+      if (stream->profile == AV_PROFILE_DTS_HD_MA)
         strName = "dtshd_ma";
-      else if (stream->profile == FF_PROFILE_DTS_HD_HRA)
+      else if (stream->profile == AV_PROFILE_DTS_HD_HRA)
         strName = "dtshd_hra";
       else
         strName = "dca";
@@ -2343,6 +2385,10 @@ AVDictionary* FFmpegStream::GetFFMpegOptionsFromInput()
   // For a local file we need the following protocol whitelist
   if (url.GetProtocol().empty() || url.IsProtocol("file"))
     av_dict_set(&options, "protocol_whitelist", "file,http,https,tcp,tls,crypto", 0);
+
+  // Disable strict HLS file extension check
+  if (kodi::addon::GetSettingBoolean("disableStrictHLSfileExtensionCheck"))
+    av_dict_set(&options, "extension_picky", "0", 0);
 
   if (url.IsProtocol("http") || url.IsProtocol("https"))
   {

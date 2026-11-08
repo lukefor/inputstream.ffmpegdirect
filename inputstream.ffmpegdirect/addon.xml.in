@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <addon
   id="inputstream.ffmpegdirect"
-  version="21.3.8"
+  version="69.2.11"
   name="Inputstream FFmpeg Direct"
   provider-name="Ross Nicholson">
   <requires>@ADDON_DEPENDS@</requires>
@@ -21,8 +21,9 @@
       <icon>icon.png</icon>
       <fanart>fanart.jpg</fanart>
     </assets>
+    <summary lang="bs_BA">InputStream klijent za FFmpeg tokove (libavformat)</summary>
     <summary lang="ca_ES">Client InputStream per a fluxos FFmpeg (libavformat)</summary>
-    <summary lang="cs_CZ">Klient toků FFmpeg (libavformat) protokolu InputStream</summary>
+    <summary lang="cs_CZ">Klient InputStream pro streamy FFmpeg (libavformat)</summary>
     <summary lang="da_DK">InputStream-klient til FFmpeg-streams (libavformat)</summary>
     <summary lang="de_DE">InputStream-Client für FFmpeg-Streams (libavformat)</summary>
     <summary lang="en_GB">InputStream Client for FFmpeg streams (libavformat)</summary>
@@ -37,9 +38,11 @@
     <summary lang="pl_PL">Klient InputStream dla strumieni FFmpeg (libavformat)</summary>
     <summary lang="pt_BR">Cliente InputStream para transmissões FFmpeg (libavformat)</summary>
     <summary lang="ru_RU">InputStream клиент для FFmpeg потоков (libavformat)</summary>
+    <summary lang="sv_SE">InputStream-klient för FFmpeg-strömmar (libavformat)</summary>
     <summary lang="zh_CN">FFmpeg 流的 InputStream 客户端（libavformat）</summary>
+    <description lang="bs_BA">InputStream klijent za tokove koji se mogu otvoriti pomoću FFmpeg-ovog libavformata ili Kodi-jevog cURL-a. Podržani su uobičajeni formati tokova kao što su običan TS, HLS i DASH (bez DRM-a), kao i mnogi drugi.[CR][CR]Dodatak također ima podršku za usluge arhiviranja/nadoknađivanja gdje postoje prozori za reprodukciju (obično u danima) i može se vremenski pomaknuti kroz taj raspon.[CR][CR]Za dokumentaciju posjetite: https://github.com/xbmc/inputtok.ffmpegdirect/blob/Matrix/README.md</description>
     <description lang="ca_ES">Client InputStream per a fluxos que es poden obrir mitjançant el libavformat de FFmpeg o el cURL de Kodi. S’admeten formats de flux comuns, com ara TS simple, HLS i DASH (sense DRM), així com molts altres.[CR][CR]El complement també és compatible amb els serveis Archive/Catchup , on hi ha una finestra de reproducció (normalment en dies) i pot canviar de temps en aquest interval.[CR][CR]Per a la documentació, visiteu: https://github.com/xbmc/inputstream.ffmpegdirect/blob/Matrix/README.md</description>
-    <description lang="cs_CZ">Klient protokolu InputStream pro toky, které mohou být otevřeny pomocí FFmpeg libavformat nebo Kodi cURL.Běžné formáty toků jako prosté TS, HLS, DASH (bez DRM) a mnoho dalších jsou podporovány.[CR][CR]Doplněk má též podporu pro služby Archive/Catchup, které mají dobu pro opětovné přehrání (obvykle ve dnech) a mohou mít v tomto období časový posun.[CR][CR]Pro dokumentaci navštivte: https://github.com/xbmc/inputstream.ffmpegdirect/blob/Matrix/README.md</description>
+    <description lang="cs_CZ">Klient InputStream pro streamy, které lze otevřít pomocí FFmpeg libavformat nebo Kodi cURL. Podporovány jsou běžné formáty streamů, jako jsou prostý TS, HLS a DASH (bez DRM), a mnoho dalších.[CR][CR]Doplněk podporuje také archivní služby a služby zpětného zhlédnutí, které mají časové okno pro zpětné přehrání (obvykle ve dnech) a v tomto rozsahu umožňují časový posun.[CR][CR]Dokumentaci najdete na: https://github.com/xbmc/inputstream.ffmpegdirect/blob/Matrix/README.md</description>
     <description lang="da_DK">InputStream-klient til streams, der kan åbnes af enten FFmpeg&apos;s libavformat eller Kodi&apos;s cURL. Almindelige streamformater som f.eks. almindelig TS, HLS og DASH (uden DRM) understøttes såvel som mange andre.[CR][CR]Add-on&apos;et har også understøttelse af arkiv-/indhentningstjenester, hvor der er et afspilningsvindue (normalt i dage) og kan tidsforskyde på tværs af dette spænd.[CR][CR]For dokumentation besøg: https://github.com/xbmc/inputstream.ffmpegdirect/blob/Matrix/README.md</description>
     <description lang="de_DE">InputStream-Client für Streams, die entweder mit dem libav-Format von FFmpeg oder mit cURL von Kodi geöffnet werden können. Gängige Stream-Formate wie TS, HLS und DASH (ohne DRM) werden ebenso unterstützt wie viele andere.[CR][CR]Das Addon unterstützt auch Archiv-/Aufholdienste, bei denen Wiedergabefenster vorhanden sind (normalerweise in Tagen), und kann über diesen Zeitraum hinweg eine Zeitverschiebung bewirken.[CR][CR]Dokumentation unter: https://github.com/xbmc/inputstream.ffmpegdirect/blob/Matrix/README.md</description>
     <description lang="en_GB">InputStream Client for streams that can be opened by either FFmpeg&apos;s libavformat or Kodi&apos;s cURL. Common stream formats such as plain TS, HLS and DASH (without DRM) are supported as well as many others.[CR][CR]The addon also has support for Archive/Catchup services where there is a replay windows (usually in days) and can timeshift across that span.[CR][CR]For documenation visit: https://github.com/xbmc/inputstream.ffmpegdirect/blob/Matrix/README.md</description>
@@ -54,6 +57,7 @@
     <description lang="pl_PL">Klient InputStream dla strumieni, które można otworzyć za pomocą libavformat FFmpeg lub cURL Kodi. Obsługiwane są popularne formaty strumieniowe, takie jak zwykły TS, HLS i DASH (bez DRM), a także wiele innych.[CR][CR]Dodatek obsługuje również usługę archiwizacji, która zapewnia okno powtórek (zazwyczaj w dniach) i może wykonywać przesunięcie czasowe przez ten zakres.[CR][CR]W celu uzyskania dokumentacji odwiedź: https://github.com/xbmc/inputstream.ffmpegdirect/blob/Matrix/README.md</description>
     <description lang="pt_BR">Cliente InputStream para transmissões que podem ser abertas pelo libavformat do FFmpeg ou pelo cURL do Kodi. Os formatos de transmissão comuns, como TS simples, HLS e DASH (sem DRM), são suportados, bem como muitos outros.[CR][CR]O addon também tem suporte para serviços de Arquivo/Catchup em que há uma janela de reprodução (geralmente em dias) e pode mudar o tempo ao longo desse intervalo.[CR][CR]Para obter documentação, visite: https://github.com/xbmc/inputstream.ffmpegdirect/blob/Matrix/README.md</description>
     <description lang="ru_RU">Клиент InputStream для потоков, которые можно открыть с помощью libavformat от FFmpeg или с помощью Kodi cURL. Поддерживаются основные форматы потоков такие, как простой TS, HLS, DASH (без DRM) и многие другие.[CR][CR]Дополнение также имеет поддержку служб Архива/Перемотки, где есть окна воспроизведения (обычно в днях), которые могут сдвигаться по времени в течение этого промежутка.[CR][CR]Для документации посетите: https://github.com/xbmc/inputstream.ffmpegdirect/blob/Matrix/README.md</description>
+    <description lang="sv_SE">InputStream Klient för strömmar som kan öppnas av antingen FFmpegs libavformat eller Kodis cURL. Vanliga strömformat som vanlig TS, HLS och DASH (utan DRM) stöds liksom många andra.[CR][CR]Tillägget har också stöd för arkiv / catchup-tjänster där det finns ett uppspelningsfönster (vanligtvis i dagar) och kan tidsförskjutas över det spannet.[CR][CR]För dokumentation besök: https://github.com/xbmc/inputstream.ffmpegdirect/blob/Matrix/README.md</description>
     <description lang="zh_CN">InputStream 客户端，用于可通过 FFmpeg 的 libavformat 或 Kodi 的 cURL 打开的流。支持普通 TS、HLS 和 DASH（无DRM）等常见流格式以及其他许多格式。[CR][CR]该插件还支持有重播窗口（通常以天为单位）的归档/捕获服务，并可以在该时间跨度内进行时光平移。[CR][CR]相关文档请访问：https://github.com/xbmc/inputstream.ffmpegdirect/blob/Matrix/README.md</description>
   </extension>
 </addon>

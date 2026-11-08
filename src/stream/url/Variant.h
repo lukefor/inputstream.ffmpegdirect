@@ -25,6 +25,8 @@ double str2double(const std::wstring &str, double fallback = 0.0);
 #pragma pack(8)
 #endif
 
+namespace ffmpegdirect
+{
 class CVariant
 {
 public:
@@ -161,6 +163,8 @@ private:
   static VariantArray EMPTY_ARRAY;
   static VariantMap EMPTY_MAP;
 };
+
+} // namespace ffmpegdirect
 
 #ifdef TARGET_WINDOWS_STORE
 #pragma pack(pop)

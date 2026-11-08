@@ -4,11 +4,16 @@
 # Addon Provider: phunkyfish
 msgid ""
 msgstr ""
+"Report-Msgid-Bugs-To: translations@kodi.tv\n"
+"PO-Revision-Date: 2026-01-19 00:55+0000\n"
+"Last-Translator: Anonymous <noreply@weblate.org>\n"
+"Language-Team: Slovak <https://kodi.weblate.cloud/projects/kodi-add-ons-videoplayer-inputstream/inputstream-ffmpegdirect/sk_sk/>\n"
 "Language: sk_sk\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=3; plural=(n==1) ? 0 : (n>=2 && n<=4) ? 1 : 2;\n"
+"X-Generator: Weblate 5.15.2\n"
 
 msgctxt "Addon Summary"
 msgid "InputStream Client for FFmpeg streams (libavformat)"
@@ -64,7 +69,7 @@ msgctxt "#30008"
 msgid "Stream selection bandwidth"
 msgstr ""
 
-#empty strings from id 30009 to 30019
+# empty strings from id 30009 to 30019
 #. label-category: timeshift
 #. label-group: Timeshift - Timeshift
 msgctxt "#30020"
@@ -91,7 +96,7 @@ msgctxt "#30024"
 msgid "{0:.2f} hours"
 msgstr ""
 
-#empty strings from id 30025 to 30039
+# empty strings from id 30025 to 30039
 #. label-category: advanced
 msgctxt "#30040"
 msgid "Advanced"
@@ -128,7 +133,12 @@ msgctxt "#30046"
 msgid "For catchup streams report stream is not realtime"
 msgstr ""
 
-#empty strings from id 30047 to 30599
+#. help: Advanced - disableStrictHLSfileExtensionCheck
+msgctxt "#30047"
+msgid "Disable strict HLS file extension check"
+msgstr ""
+
+# empty strings from id 30047 to 30599
 #. ############
 #. help info #
 #. ############
@@ -168,7 +178,7 @@ msgctxt "#30606"
 msgid "Use this value as a maximum when selecting which HLS stream to use."
 msgstr ""
 
-#empty strings from id 30607 to 30619
+# empty strings from id 30607 to 30619
 #. help info - Timeshift
 #. help-category: timeshift
 msgctxt "#30620"
@@ -190,7 +200,7 @@ msgctxt "#30623"
 msgid "The length of the timeshift buffer in hours. Once the value is reached the older buffer data will be deleted to ensure the limit is not breached. Note that the storage for your device should be sufficient to allow the buffer to grow to it's maximum length (otherwise it's equivalent to disabling this option). A good heuristic for video size is 130MB per minute of 1080p video and 375MB per minute of 4K video."
 msgstr ""
 
-#empty strings from id 30624 to 30639
+# empty strings from id 30624 to 30639
 #. help info - Advanced
 #. help-category: advanced
 msgctxt "#30640"
@@ -220,4 +230,9 @@ msgstr ""
 #. help: Advanced - forceRealtimeOffCatchup
 msgctxt "#30645"
 msgid "For certain catchup streams such as HLS reporting that a live stream is not live can improve stream open times. If testing this option works for a catchup stream/provider, then add a [I]\"#KODIPROP=inputstream.ffmpegdirect.is_realtime_stream=false\"[/I] to the M3U entry in question. This setting should not be left enabled for all streams."
+msgstr ""
+
+#. help: Advanced - disableStrictHLSfileExtensionCheck
+msgctxt "#30646"
+msgid "Allows playing HLS streams without file extension or with unsupported file extension. This lowers the security requirements in ffmpeg."
 msgstr ""

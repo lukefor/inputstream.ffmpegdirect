@@ -5,7 +5,7 @@
 msgid ""
 msgstr ""
 "Report-Msgid-Bugs-To: translations@kodi.tv\n"
-"PO-Revision-Date: 2022-07-08 08:14+0000\n"
+"PO-Revision-Date: 2026-06-08 06:39+0000\n"
 "Last-Translator: Oskari Lavinto <olavinto@protonmail.com>\n"
 "Language-Team: Finnish <https://kodi.weblate.cloud/projects/kodi-add-ons-videoplayer-inputstream/inputstream-ffmpegdirect/fi_fi/>\n"
 "Language: fi_fi\n"
@@ -13,7 +13,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=n != 1;\n"
-"X-Generator: Weblate 4.13\n"
+"X-Generator: Weblate 2026.6.1\n"
 
 msgctxt "Addon Summary"
 msgid "InputStream Client for FFmpeg streams (libavformat)"
@@ -121,7 +121,7 @@ msgstr "FPS-tutkinta (FPS Probe)"
 #. label: Advanced - enableTeletext
 msgctxt "#30044"
 msgid "Enable teletext"
-msgstr "Käytä teksti-TV:tä"
+msgstr "Käytä teksti-tv:tä"
 
 #. help: Advanced - useFastOpemForManifestStreams
 msgctxt "#30045"
@@ -132,6 +132,11 @@ msgstr "Käytä nopeaa avausta manifestitiedostoja hyödyntäville mediavirroill
 msgctxt "#30046"
 msgid "For catchup streams report stream is not realtime"
 msgstr "Ilmoita toistettaessa catchup-mediavirtoja, ettei toisto ole reaaliaikainen"
+
+#. help: Advanced - disableStrictHLSfileExtensionCheck
+msgctxt "#30047"
+msgid "Disable strict HLS file extension check"
+msgstr ""
 
 # empty strings from id 30047 to 30599
 #. ############
@@ -215,7 +220,7 @@ msgstr "Tutki sekuntikohtaisia ruutuja (FPS Probe). Oletuksena käytössä. Jos 
 #. help: Advanced - enableTeletext
 msgctxt "#30643"
 msgid "Allow teletext. Default enabled."
-msgstr "Salli teksti-TV. Oletuksena käytössä."
+msgstr "Salli teksti-tv. Oletuksena käytössä."
 
 #. help: Advanced - useFastOpenForManifestStreams
 msgctxt "#30644"
@@ -226,3 +231,8 @@ msgstr "Mahdollistaa manifestitiedoston sisältävien mediavirtojen (esim. HLD/D
 msgctxt "#30645"
 msgid "For certain catchup streams such as HLS reporting that a live stream is not live can improve stream open times. If testing this option works for a catchup stream/provider, then add a [I]\"#KODIPROP=inputstream.ffmpegdirect.is_realtime_stream=false\"[/I] to the M3U entry in question. This setting should not be left enabled for all streams."
 msgstr "Joidenkin catchup-mediavirtojen (kuten HLS) ilmoittaessa, ettei lähetys ole suora voidaan mediavirtojen avautumisaikoja parantaa. Jos avalinnan koekäyttö toimii catchup-suoratoiston/-palveluntarjoajan kanssa, lisää kyseiseen M3U-merkintään [I]\"#KODIPROP=inputstream.ffmpegdirect.is_realtime_stream=false\"[/I]-tietue. Asetusta ei tule käyttää kaikille suoratoistoille."
+
+#. help: Advanced - disableStrictHLSfileExtensionCheck
+msgctxt "#30646"
+msgid "Allows playing HLS streams without file extension or with unsupported file extension. This lowers the security requirements in ffmpeg."
+msgstr ""

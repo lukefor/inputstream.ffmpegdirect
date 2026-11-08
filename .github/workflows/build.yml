@@ -17,11 +17,15 @@ jobs:
             CC: clang
             CXX: clang++
     steps:
+    - name: Install autopoint & nasm
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y autopoint nasm
     - name: Checkout Kodi repo
       uses: actions/checkout@v5
       with:
         repository: xbmc/xbmc
-        ref: Omega
+        ref: master
         path: xbmc
     - name: Checkout add-on repo
       uses: actions/checkout@v5

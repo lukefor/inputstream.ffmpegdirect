@@ -8,6 +8,8 @@
 #pragma once
 
 #include "FFmpegStream.h"
+
+#include <map>
 #include "../utils/HttpProxy.h"
 #include "../utils/TimeUtils.h"
 
@@ -77,13 +79,23 @@ protected:
 
   bool m_isOpeningStream;
   double m_seekOffset;
-  double m_pauseStartTime;
-  double m_currentDemuxTime;
+  double m_pauseStartTime = 0;
+  double m_currentDemuxTime = 0;
 
   long long m_previousLiveBufferOffset = 0;
   bool m_lastSeekWasLive = false;
   bool m_lastPacketWasAvoidedEOF = false;
   bool m_seekCorrectsEOF = false;
+
+  // When the stream is reopened internally to continue from the current demux position
+  // (EOF on a terminating catchup stream, or resuming after pause) the new stream can
+  // start earlier than where we were, e.g. due to minute granularity or the server
+  // starting at a segment boundary. Remember the last timestamp delivered per stream so
+  // the overlap can be dropped instead of being played again.
+  bool m_continuationSeek = false;
+  std::map<int, double> m_lastDemuxTimestamps;
+  std::map<int, double> m_continuationTimestamps;
+  int m_continuationDroppedPackets = 0;
 };
 
 } //namespace ffmpegdirect

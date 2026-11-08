@@ -13,6 +13,7 @@
 #include <kodi/tools/StringUtils.h>
 
 using namespace kodi::tools;
+using namespace ffmpegdirect;
 
 CUrlOptions::CUrlOptions() = default;
 
@@ -157,7 +158,7 @@ bool CUrlOptions::HasOption(const std::string &key) const
   return m_options.find(key) != m_options.end();
 }
 
-bool CUrlOptions::GetOption(const std::string &key, CVariant &value) const
+bool CUrlOptions::GetOption(const std::string &key, ffmpegdirect::CVariant &value) const
 {
   if (key.empty())
     return false;

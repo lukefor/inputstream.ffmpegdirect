@@ -1,6 +1,7 @@
-nettle
+bz2
 gas-preprocessor
-gnutls
+openssl
 zlib
 libzvbi
 libxml2
+xz-utils
