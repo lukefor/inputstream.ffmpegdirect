@@ -1,6 +1,7 @@
 # build artifacts
 build/
 build-coreelec21-arm/
+build-coreelec-*/
 inputstream.*/addon.xml
 
 # Debian build files

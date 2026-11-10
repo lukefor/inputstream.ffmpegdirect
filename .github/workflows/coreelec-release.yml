@@ -1,23 +1,57 @@
-name: CoreELEC 21 arm release
-# Builds the add-on for CoreELEC 21 Amlogic-ng.arm (e.g. AVDVPlus R10) with
-# tools/coreelec/build-coreelec21-arm.sh and publishes it as a GitHub release.
-# Triggered by pushing a tag ending in -CoreELEC21 (e.g. 69.2.11-CoreELEC21), or by pushing a
-# commit whose message contains [coreelec-release], which tags <addon version>-CoreELEC21.
+name: CoreELEC release
+# Builds the add-on with tools/coreelec/build-coreelec.sh and attaches the zips to GitHub releases:
+#   ce21-arm      CoreELEC 21 (Kodi 21 Omega) Amlogic-ng.arm, e.g. AVDVPlus R10  -> <version>-CoreELEC21
+#   ce22-aarch64  CoreELEC 22 (Kodi 22 Piers) Amlogic-no.aarch64                 -> <version>-Piers
+# <version> is the version in addon.xml.in. Missing releases are created, existing ones get the zip
+# attached, and a zip that is already attached to its release is not rebuilt.
+#
+# Triggers: pushing a commit whose message contains [coreelec-release] (all targets), or manually
+# from the Actions tab (Run workflow) on any branch.
 
 on:
   push:
-    tags:
-      - '*-CoreELEC21'
     branches:
       - '**'
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Target(s) to build'
+        type: choice
+        options:
+          - all
+          - ce21-arm
+          - ce22-aarch64
+        default: all
 
 permissions:
   contents: write
 
 jobs:
   release:
-    if: github.ref_type == 'tag' || contains(github.event.head_commit.message, '[coreelec-release]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[coreelec-release]')
+    name: ${{ matrix.target }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: ce21-arm
+            compiler: g++-arm-linux-gnueabihf
+            host: arm-linux-gnueabihf
+            tag_suffix: CoreELEC21
+            zip_suffix: CoreELEC21-Amlogic-ng.arm
+            max_glibc: GLIBC_2.38       # CoreELEC 21: glibc 2.38, GCC 13
+            max_glibcxx: GLIBCXX_3.4.32
+            description: '**CoreELEC 21 Amlogic-ng.arm** (Kodi 21 Omega, 32-bit ARM userspace), e.g. AVDVPlus R10'
+          - target: ce22-aarch64
+            compiler: g++-aarch64-linux-gnu
+            host: aarch64-linux-gnu
+            tag_suffix: Piers
+            zip_suffix: CoreELEC22-Amlogic-no.aarch64
+            max_glibc: GLIBC_2.44       # CoreELEC 22: glibc 2.44, GCC 16
+            max_glibcxx: GLIBCXX_3.4.35
+            description: '**CoreELEC 22 Amlogic-no.aarch64** (Kodi 22 Piers, 64-bit ARM userspace)'
+
     steps:
       - name: Checkout add-on
         uses: actions/checkout@v5
@@ -25,61 +59,88 @@ jobs:
           path: inputstream.ffmpegdirect
           fetch-depth: 0
 
-      - name: Determine release tag
-        id: tag
+      - name: Check what needs doing
+        id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_TARGETS: ${{ inputs.targets }}
         run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
-            tag="$GITHUB_REF_NAME"
-          else
-            version=$(awk '/<addon/{f=1} f && /version="/{match($0,/version="[^"]*"/); print substr($0,RSTART+9,RLENGTH-10); exit}' \
-              inputstream.ffmpegdirect/inputstream.ffmpegdirect/addon.xml.in)
-            tag="$version-CoreELEC21"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$INPUT_TARGETS" != all ] && \
+             [ "$INPUT_TARGETS" != "${{ matrix.target }}" ]; then
+            echo "Target not selected"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          version=$(awk '/<addon/{f=1} f && /version="/{match($0,/version="[^"]*"/); print substr($0,RSTART+9,RLENGTH-10); exit}' \
+            inputstream.ffmpegdirect/inputstream.ffmpegdirect/addon.xml.in)
+          tag="$version-${{ matrix.tag_suffix }}"
+          zipname="inputstream.ffmpegdirect-$version-${{ matrix.zip_suffix }}.zip"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            echo "Release $tag already exists, nothing to do"
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "Release $tag, asset $zipname"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' > "$RUNNER_TEMP/assets" 2> /dev/null; then
+            echo "release_exists=true" >> "$GITHUB_OUTPUT"
+            if grep -qxF "$zipname" "$RUNNER_TEMP/assets"; then
+              echo "$zipname is already attached to $tag, nothing to do"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Install cross toolchain and build tools
-        if: steps.tag.outputs.exists != 'true'
+        if: steps.plan.outputs.skip != 'true'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y g++-arm-linux-gnueabihf cmake autoconf automake autopoint \
+          sudo apt-get install -y ${{ matrix.compiler }} cmake autoconf automake autopoint \
             libtool pkg-config nasm gettext zip
 
       - name: Build
-        if: steps.tag.outputs.exists != 'true'
-        run: inputstream.ffmpegdirect/tools/coreelec/build-coreelec21-arm.sh "$GITHUB_WORKSPACE/out"
+        if: steps.plan.outputs.skip != 'true'
+        run: inputstream.ffmpegdirect/tools/coreelec/build-coreelec.sh ${{ matrix.target }} "$GITHUB_WORKSPACE/out"
 
-      - name: Check binary compatibility with CoreELEC 21 (glibc 2.38, GCC 13)
-        if: steps.tag.outputs.exists != 'true'
+      - name: Check binary compatibility with the target
+        if: steps.plan.outputs.skip != 'true'
         run: |
           so=$(ls out/stage/inputstream.ffmpegdirect/inputstream.ffmpegdirect.so.*)
-          glibc=$(arm-linux-gnueabihf-objdump -T "$so" | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1)
-          glibcxx=$(arm-linux-gnueabihf-objdump -T "$so" | grep -oE 'GLIBCXX_[0-9.]+' | sort -uV | tail -1)
-          exports=$(arm-linux-gnueabihf-nm -D --defined-only "$so" | awk '{print $3}' | grep -v '^_Z' | tr '\n' ' ')
-          echo "Max $glibc, max $glibcxx, C exports: $exports"
-          printf '%s\n' "$glibc" GLIBC_2.38 | sort -CV
-          printf '%s\n' "$glibcxx" GLIBCXX_3.4.32 | sort -CV
+          glibc=$(${{ matrix.host }}-objdump -T "$so" | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1)
+          glibcxx=$(${{ matrix.host }}-objdump -T "$so" | grep -oE 'GLIBCXX_[0-9.]+' | sort -uV | tail -1)
+          exports=$(${{ matrix.host }}-nm -D --defined-only "$so" | awk '{print $3}' | grep -v '^_Z' | tr '\n' ' ')
+          echo "Max $glibc (target ${{ matrix.max_glibc }}), max $glibcxx (target ${{ matrix.max_glibcxx }}), C exports: $exports"
+          printf '%s\n' "$glibc" ${{ matrix.max_glibc }} | sort -CV
+          printf '%s\n' "$glibcxx" ${{ matrix.max_glibcxx }} | sort -CV
           [ "$exports" = "ADDON_Create ADDON_GetTypeMinVersion ADDON_GetTypeVersion " ]
 
-      - name: Create release
-        if: steps.tag.outputs.exists != 'true'
+      - name: Publish
+        if: steps.plan.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          tag: ${{ steps.tag.outputs.tag }}
+          tag: ${{ steps.plan.outputs.tag }}
+          RELEASE_EXISTS: ${{ steps.plan.outputs.release_exists }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         working-directory: inputstream.ffmpegdirect
         run: |
           zip=$(ls "$GITHUB_WORKSPACE"/out/*.zip)
           sha=$(sha256sum "$zip" | cut -d' ' -f1)
+          install="Install: copy \`$(basename "$zip")\` to the box, then Add-ons > Install from zip file."
+
+          if [ "$RELEASE_EXISTS" = true ]; then
+            gh release upload "$tag" "$zip" --repo "$GITHUB_REPOSITORY"
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "$RUNNER_TEMP/notes.md"
+            {
+              echo
+              echo "### $(basename "$zip")"
+              echo "Build for ${{ matrix.description }}, FFmpeg 9.0.2 bundled, built from $GITHUB_REF_NAME at $GITHUB_SHA."
+              echo
+              echo "$install"
+              echo
+              echo "SHA-256: \`$sha\`"
+            } >> "$RUNNER_TEMP/notes.md"
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
+            exit 0
+          fi
+
           {
-            echo "Build of inputstream.ffmpegdirect for **CoreELEC 21 Amlogic-ng.arm** (Kodi 21 Omega, 32-bit ARM userspace), e.g. AVDVPlus R10. FFmpeg 9.0.2 is bundled."
+            echo "Build of inputstream.ffmpegdirect for ${{ matrix.description }}. FFmpeg 9.0.2 is bundled."
             echo
-            echo "Install: copy the zip to the box, then Add-ons > Install from zip file."
+            echo "$install"
             echo
             echo "### Changes"
             awk -v RS= 'NR==1' inputstream.ffmpegdirect/changelog.txt | tail -n +2
