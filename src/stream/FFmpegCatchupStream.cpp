@@ -117,7 +117,9 @@ bool FFmpegCatchupStream::DemuxSeekTime(double timeMs, bool backwards, double& s
           // continue from the current position, dropping what was already delivered
           const double currentSecs = m_currentDemuxTime / 1000;
           expectedSecs = currentSecs;
-          maxEarlierSecs = std::max(0.0, currentSecs - newOffsetSecs) + REOPEN_START_TOLERANCE_SECS;
+          // The server can start up to a whole chunk before even the requested position
+          maxEarlierSecs = std::max(MAX_REOPEN_START_EARLIER_SECS,
+                                    std::max(0.0, currentSecs - newOffsetSecs) + REOPEN_START_TOLERANCE_SECS);
           keepReplayHistory = true;
           m_continuationTimestamps = m_lastDemuxTimestamps;
         }
