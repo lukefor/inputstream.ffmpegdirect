@@ -71,13 +71,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           tag: ${{ steps.tag.outputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        working-directory: inputstream.ffmpegdirect
         run: |
-          # GITHUB_TOKEN may not create a tag on a commit that adds workflow files compared to the
-          # default branch, so tag the latest commit that changed anything outside .github instead.
-          # The add-on is built from files outside .github, so this is the same source.
-          target=$(git -C inputstream.ffmpegdirect rev-list -1 "$GITHUB_SHA" -- . ':!.github')
-          echo "Tagging $tag at $target"
-          zip=$(ls out/*.zip)
+          zip=$(ls "$GITHUB_WORKSPACE"/out/*.zip)
           sha=$(sha256sum "$zip" | cut -d' ' -f1)
           {
             echo "Build of inputstream.ffmpegdirect for **CoreELEC 21 Amlogic-ng.arm** (Kodi 21 Omega, 32-bit ARM userspace), e.g. AVDVPlus R10. FFmpeg 9.0.2 is bundled."
@@ -85,9 +82,36 @@ jobs:
             echo "Install: copy the zip to the box, then Add-ons > Install from zip file."
             echo
             echo "### Changes"
-            awk -v RS= 'NR==1' inputstream.ffmpegdirect/inputstream.ffmpegdirect/changelog.txt | tail -n +2
+            awk -v RS= 'NR==1' inputstream.ffmpegdirect/changelog.txt | tail -n +2
+            echo
+            echo "Built from $GITHUB_REF_NAME at $GITHUB_SHA."
             echo
             echo "SHA-256 \`$(basename "$zip")\`: \`$sha\`"
-          } > notes.md
-          gh release create "$tag" "$zip" --repo "$GITHUB_REPOSITORY" --target "$target" \
-            --title "$tag" --notes-file notes.md
+          } > "$RUNNER_TEMP/notes.md"
+
+          # GITHUB_TOKEN may not create a tag on a commit whose workflow files differ from the
+          # default branch (HTTP 403). Tag a commit with this commit's add-on source and the
+          # default branch's .github directory instead, the add-on is built from the former only.
+          git fetch -q origin "$DEFAULT_BRANCH"
+          export GIT_INDEX_FILE="$RUNNER_TEMP/release-index"
+          git read-tree "$GITHUB_SHA"
+          git rm -r -q --cached .github
+          git read-tree --prefix=.github/ "origin/$DEFAULT_BRANCH:.github"
+          tree=$(git write-tree)
+          unset GIT_INDEX_FILE
+          export GIT_AUTHOR_NAME="github-actions[bot]" GIT_COMMITTER_NAME="github-actions[bot]"
+          export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+          commit=$(git commit-tree "$tree" -p "$GITHUB_SHA" \
+            -m "Release $tag" -m "Add-on source of $GITHUB_SHA with the .github directory of $DEFAULT_BRANCH.")
+          echo "Tagging $tag at $commit"
+
+          if git push origin "$commit:refs/tags/$tag"; then
+            gh release create "$tag" "$zip" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "$tag" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            # A draft does not create the tag until it is published
+            echo "::warning::Could not create tag $tag, creating a draft release to be published manually"
+            gh release create "$tag" "$zip" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" \
+              --title "$tag" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
