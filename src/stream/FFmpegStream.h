@@ -104,8 +104,35 @@ public:
   AVFormatContext* m_pFormatContext;
   std::shared_ptr<CurlInput> m_curlInput;
 
+  // How a stream reopened by PrepareContinuation() maps onto the previous timeline
+  enum class ContinuationState
+  {
+    NONE, // not a continuation
+    PENDING, // reopened, waiting for the first audio/video packet to decide
+    SOURCE_TIMELINE, // source timestamps continue the previous stream, previous mapping kept
+    FALLBACK, // unrelated timestamps, the caller has to supply a new mapping
+  };
+
 protected:
   virtual std::string GetStreamCodecName(int iStreamId);
+
+  /*!
+   * Call before reopening the stream to continue from the current position (e.g. a new
+   * catchup URL). If the new stream carries the same source timestamps (the same encoder,
+   * as with archives of a live channel), the current timestamp mapping is kept and data
+   * already delivered is dropped exactly, so playback continues seamlessly.
+   * @param maxBacktrackSecs how far before the current position the new stream may start
+   */
+  void PrepareContinuation(double maxBacktrackSecs);
+  ContinuationState GetContinuationState() const { return m_continuationState; }
+
+  /*!
+   * After a seek where the stream starts before the requested position (e.g. catchup URLs
+   * with minute granularity), drop data until the first video keyframe at or after the
+   * target so playback starts where the user asked instead of up to a minute earlier.
+   * @param targetTs target in the timestamps produced by this class (STREAM_TIME_BASE)
+   */
+  void SkipUntil(double targetTs);
   virtual void CurrentPTSUpdated();
   bool IsPaused() { return m_speed == STREAM_PLAYSPEED_PAUSE; }
   virtual bool CheckReturnEmptyOnPacketResult(int result);
@@ -151,6 +178,9 @@ private:
   void FlushDemuxer();
   bool IsReplayedLivePacket(const AVPacket& pkt, const AVStream* stream);
   void ResetReplayDetection();
+  double GetTimestampStartTime() const;
+  bool CheckContinuationTimeline(const AVPacket& pkt, const AVStream* stream);
+  bool IsBeforeSkipTarget(const DEMUX_PACKET* packet, const AVStream* stream, bool keyFrame);
 
   bool StreamsOpened() { return m_streams.size() > 0; }
 
@@ -208,13 +238,23 @@ private:
   struct ReplayGuard
   {
     int64_t highWaterTs = AV_NOPTS_VALUE;
+    AVRational timeBase = {0, 1};
     bool skipping = false;
     int droppedPackets = 0;
     std::unordered_set<int64_t> deliveredTs;
     std::deque<int64_t> deliveredOrder;
   };
-  static const size_t REPLAY_GUARD_HISTORY_SIZE = 8192; // > 2 minutes of packets for typical A/V streams
+  static const size_t REPLAY_GUARD_HISTORY_SIZE = 16384; // > 5 minutes of packets for typical A/V streams
   std::map<int, ReplayGuard> m_replayGuards;
+
+  ContinuationState m_continuationState = ContinuationState::NONE;
+  double m_continuationMaxBacktrackSecs = 0;
+  double m_pinnedStartTime = 0; // seconds, used instead of the stream's start time when pinned
+  bool m_startTimePinned = false;
+
+  double m_skipUntilTs = STREAM_NOPTS_VALUE;
+  double m_skipAudioFloorTs = STREAM_NOPTS_VALUE;
+  bool m_skipVideoStarted = false;
 
   HttpProxy m_httpProxy;
   OpenMode m_openMode;

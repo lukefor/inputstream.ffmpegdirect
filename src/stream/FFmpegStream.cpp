@@ -377,7 +377,13 @@ DEMUX_PACKET* FFmpegStream::DemuxRead()
 
       AVStream* stream = m_pFormatContext->streams[m_pkt.pkt.stream_index];
 
-      if (m_isRealTimeStream && IsReplayedLivePacket(m_pkt.pkt, stream))
+      if (m_continuationState == ContinuationState::PENDING &&
+          !CheckContinuationTimeline(m_pkt.pkt, stream))
+      {
+        bReturnEmpty = true;
+      }
+      else if ((m_isRealTimeStream || m_continuationState != ContinuationState::NONE) &&
+               IsReplayedLivePacket(m_pkt.pkt, stream))
       {
         bReturnEmpty = true;
       }
@@ -457,6 +463,14 @@ DEMUX_PACKET* FFmpegStream::DemuxRead()
         // store internal id until we know the continuous id presented to player
         // the stream might not have been created yet
         pPacket->iStreamId = m_pkt.pkt.stream_index;
+
+        if (m_skipUntilTs != STREAM_NOPTS_VALUE &&
+            IsBeforeSkipTarget(pPacket, stream, (m_pkt.pkt.flags & AV_PKT_FLAG_KEY) != 0))
+        {
+          m_demuxPacketManager->FreeDemuxPacketFromInputStreamAPI(pPacket);
+          pPacket = nullptr;
+          bReturnEmpty = true;
+        }
       }
       m_pkt.result = -1;
       av_packet_unref(&m_pkt.pkt);
@@ -687,7 +701,9 @@ bool FFmpegStream::Open(bool fileinfo)
   std::string strFile;
   m_streaminfo = !m_isRealTimeStream && !m_reopen;
   m_currentPts = STREAM_NOPTS_VALUE;
-  ResetReplayDetection();
+  // keep the history when reopening to continue the previous stream
+  if (m_continuationState != ContinuationState::PENDING)
+    ResetReplayDetection();
   m_speed = STREAM_PLAYSPEED_NORMAL;
   m_program = UINT_MAX;
   m_seekToKeyFrame = false;
@@ -1105,6 +1121,150 @@ void FFmpegStream::CurrentPTSUpdated()
 void FFmpegStream::ResetReplayDetection()
 {
   m_replayGuards.clear();
+  m_continuationState = ContinuationState::NONE;
+  m_startTimePinned = false;
+  m_skipUntilTs = STREAM_NOPTS_VALUE;
+  m_skipAudioFloorTs = STREAM_NOPTS_VALUE;
+  m_skipVideoStarted = false;
+}
+
+void FFmpegStream::PrepareContinuation(double maxBacktrackSecs)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+  if (!m_startTimePinned)
+  {
+    if (!m_pFormatContext)
+      return;
+
+    // Keep converting timestamps relative to the current stream's start
+    m_pinnedStartTime = GetTimestampStartTime();
+    m_startTimePinned = true;
+  }
+
+  m_continuationMaxBacktrackSecs = maxBacktrackSecs;
+  m_continuationState = ContinuationState::PENDING;
+  m_skipUntilTs = STREAM_NOPTS_VALUE;
+}
+
+bool FFmpegStream::CheckContinuationTimeline(const AVPacket& pkt, const AVStream* stream)
+{
+  // Decide on the first audio/video packet, hold back anything else until then
+  if (!stream || !stream->codecpar ||
+      (stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO &&
+       stream->codecpar->codec_type != AVMEDIA_TYPE_AUDIO))
+    return false;
+
+  const int64_t ts = pkt.dts != AV_NOPTS_VALUE ? pkt.dts : pkt.pts;
+  if (ts == AV_NOPTS_VALUE)
+    return false;
+
+  // allow for jitter and for servers starting a little before/after what was asked for
+  constexpr double CONTINUATION_TOLERANCE_SECS = 30.0;
+
+  bool sameTimeline = false;
+  double diffSecs = 0;
+  const auto it = m_replayGuards.find(pkt.stream_index);
+  if (it != m_replayGuards.end() && it->second.highWaterTs != AV_NOPTS_VALUE &&
+      av_cmp_q(it->second.timeBase, stream->time_base) == 0)
+  {
+    diffSecs = static_cast<double>(ts - it->second.highWaterTs) * av_q2d(stream->time_base);
+    sameTimeline = diffSecs >= -(m_continuationMaxBacktrackSecs + CONTINUATION_TOLERANCE_SECS) &&
+                   diffSecs <= CONTINUATION_TOLERANCE_SECS;
+  }
+
+  if (sameTimeline)
+  {
+    Log(LOGLEVEL_INFO, "%s - Continued stream carries the source timestamps of the previous stream (starts %.2f seconds from the previous position), continuing seamlessly",
+        __FUNCTION__, diffSecs);
+    m_continuationState = ContinuationState::SOURCE_TIMELINE;
+  }
+  else
+  {
+    Log(LOGLEVEL_INFO, "%s - Continued stream has unrelated timestamps, using its own timeline", __FUNCTION__);
+    m_continuationState = ContinuationState::FALLBACK;
+    m_startTimePinned = false;
+    m_replayGuards.clear();
+  }
+
+  return true;
+}
+
+void FFmpegStream::SkipUntil(double targetTs)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+  Log(LOGLEVEL_DEBUG, "%s - Skipping data before %.3f seconds", __FUNCTION__, targetTs / STREAM_TIME_BASE);
+  m_skipUntilTs = targetTs;
+  m_skipAudioFloorTs = STREAM_NOPTS_VALUE;
+  m_skipVideoStarted = false;
+}
+
+bool FFmpegStream::IsBeforeSkipTarget(const DEMUX_PACKET* packet, const AVStream* stream, bool keyFrame)
+{
+  // Give up waiting for a flagged keyframe this far past the target
+  constexpr double MAX_KEYFRAME_WAIT = 10.0 * STREAM_TIME_BASE;
+
+  bool hasVideo = false;
+  for (const auto& demuxStream : m_streams)
+  {
+    if (demuxStream.second && demuxStream.second->type == INPUTSTREAM_TYPE_VIDEO)
+    {
+      hasVideo = true;
+      break;
+    }
+  }
+
+  const double ts = packet->dts != STREAM_NOPTS_VALUE ? packet->dts : packet->pts;
+  const bool isVideo = stream && stream->codecpar && stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO;
+
+  if (isVideo)
+  {
+    if (m_skipVideoStarted)
+      return false;
+
+    if (ts != STREAM_NOPTS_VALUE && ts >= m_skipUntilTs &&
+        (keyFrame || ts >= m_skipUntilTs + MAX_KEYFRAME_WAIT))
+    {
+      Log(LOGLEVEL_INFO, "%s - Reached seek target, starting at %.3f seconds (target %.3f)", __FUNCTION__,
+          ts / STREAM_TIME_BASE, m_skipUntilTs / STREAM_TIME_BASE);
+      m_skipVideoStarted = true;
+      m_skipAudioFloorTs = ts;
+      return false;
+    }
+    return true;
+  }
+
+  if (hasVideo && !m_skipVideoStarted)
+    return true;
+
+  const double floorTs = hasVideo ? m_skipAudioFloorTs : m_skipUntilTs;
+  if (ts != STREAM_NOPTS_VALUE && ts < floorTs)
+    return true;
+
+  if (stream && stream->codecpar && stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+  {
+    // audio has caught up with the video start, nothing left to skip
+    m_skipUntilTs = STREAM_NOPTS_VALUE;
+    m_skipAudioFloorTs = STREAM_NOPTS_VALUE;
+  }
+
+  return false;
+}
+
+double FFmpegStream::GetTimestampStartTime() const
+{
+  if (m_startTimePinned)
+    return m_pinnedStartTime;
+
+  double starttime = 0.0;
+  if (m_pFormatContext && m_pFormatContext->start_time != static_cast<int64_t>(AV_NOPTS_VALUE))
+    starttime = static_cast<double>(m_pFormatContext->start_time) / AV_TIME_BASE;
+
+  if (m_checkTransportStream)
+    starttime = m_startTime;
+
+  return starttime;
 }
 
 bool FFmpegStream::IsReplayedLivePacket(const AVPacket& pkt, const AVStream* stream)
@@ -1124,6 +1284,7 @@ bool FFmpegStream::IsReplayedLivePacket(const AVPacket& pkt, const AVStream* str
     return false;
 
   ReplayGuard& guard = m_replayGuards[pkt.stream_index];
+  guard.timeBase = stream->time_base;
 
   const int64_t ts = pkt.dts != AV_NOPTS_VALUE ? pkt.dts : pkt.pts;
   if (ts == AV_NOPTS_VALUE)
@@ -1193,22 +1354,11 @@ double FFmpegStream::ConvertTimestamp(int64_t pts, int den, int num)
   // do calculations in floats as they can easily overflow otherwise
   // we don't care for having a completely exact timestamp anyway
   double timestamp = (double)pts * num / den;
-  double starttime = 0.0;
-
-  //const std::shared_ptr<CDVDInputStream::IMenus> menuInterface =
-  //    std::dynamic_pointer_cast<CDVDInputStream::IMenus>(m_pInput);
-  //if ((!menuInterface || menuInterface->GetSupportedMenuType() != MenuType::NATIVE) &&
-  if (m_pFormatContext->start_time != static_cast<int64_t>(AV_NOPTS_VALUE))
-  {
-    starttime = static_cast<double>(m_pFormatContext->start_time) / AV_TIME_BASE;
-  }
-
-  if (m_checkTransportStream)
-    starttime = m_startTime;
+  const double starttime = GetTimestampStartTime();
 
   if (!m_bSup)
   {
-    if (timestamp > starttime || m_checkTransportStream)
+    if (timestamp > starttime || m_checkTransportStream || m_startTimePinned)
       timestamp -= starttime;
     // allow for largest possible difference in pts and dts for a single packet
     else if (timestamp + 0.5 > starttime)

@@ -96,6 +96,11 @@ protected:
   std::map<int, double> m_lastDemuxTimestamps;
   std::map<int, double> m_continuationTimestamps;
   int m_continuationDroppedPackets = 0;
+  // Offset of the new URL, used only if the continued stream does not carry the source timestamps
+  double m_pendingContinuationOffset = 0;
+  bool m_hasPendingContinuationOffset = false;
+  // The position a seek asked for, before aligning it to the catchup granularity
+  long long m_seekTargetBufferOffset = -1;
 };
 
 } //namespace ffmpegdirect

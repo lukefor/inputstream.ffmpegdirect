@@ -1,3 +1,7 @@
+v69.2.12
+- Catchup: keep the timestamp mapping when a stream is continued (EOF on terminating streams, resume after pause) if the new stream carries the same source timestamps, removing the small skip at each continuation
+- Catchup: after a seek, skip ahead to the requested position when the server starts the stream earlier (minute granularity) instead of starting up to a minute before it
+
 v69.2.11
 - Bump major version to 69
 - Drop replayed packets when a live source jumps back to data already delivered (e.g. after an HTTP reconnect)
