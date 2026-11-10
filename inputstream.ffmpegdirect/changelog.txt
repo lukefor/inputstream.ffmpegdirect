@@ -1,3 +1,7 @@
+v69.2.15
+- Catchup: when data is missing from the stream (servers like Dispatcharr resume a dropped connection at the wrong place), reopen the catchup stream by time from the last delivered position to fetch it, instead of skipping it. Data still missing after refetching is accepted once
+- This also keeps seeking accurate: Kodi absorbs every forward jump in the timestamps into an offset it keeps for the whole session, so skipped data made its clock, and every relative seek, fall further behind
+
 v69.2.14
 - Catchup: fix resuming after pause jumping back up to a minute when the server starts the continued stream at the beginning of its minute/chunk
 

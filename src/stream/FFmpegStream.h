@@ -135,6 +135,21 @@ protected:
   void PrepareReopen(double expectedTs, double maxEarlierSecs, double maxLaterSecs,
                      bool keepReplayHistory, double skipTargetSource, double skipTargetFallback);
   ContinuationState GetContinuationState() const { return m_continuationState; }
+
+  /*!
+   * When enabled, a hole in the source timestamps (data the server skipped, typically after an
+   * HTTP reconnect that resumed at the wrong place) is not passed on. Instead
+   * ConsumeGapRepairRequest() returns true once, so the caller can reopen the stream from the
+   * last delivered position and get the missing data. A hole that is still there after that is
+   * accepted as missing from the source.
+   */
+  void EnableGapRepair(bool enable) { m_gapRepairEnabled = enable; }
+  bool ConsumeGapRepairRequest()
+  {
+    const bool requested = m_gapRepairRequested;
+    m_gapRepairRequested = false;
+    return requested;
+  }
   virtual void CurrentPTSUpdated();
   bool IsPaused() { return m_speed == STREAM_PLAYSPEED_PAUSE; }
   virtual bool CheckReturnEmptyOnPacketResult(int result);
@@ -242,6 +257,7 @@ private:
   {
     int64_t highWaterTs = AV_NOPTS_VALUE;
     AVRational timeBase = {0, 1};
+    int64_t refetchedGapAt = AV_NOPTS_VALUE; // position of the last hole that was refetched
     bool skipping = false;
     int droppedPackets = 0;
     std::unordered_set<int64_t> deliveredTs;
@@ -251,6 +267,9 @@ private:
   std::map<int, ReplayGuard> m_replayGuards;
 
   ContinuationState m_continuationState = ContinuationState::NONE;
+
+  bool m_gapRepairEnabled = false;
+  bool m_gapRepairRequested = false;
   double m_reopenExpectedTs = 0;
   double m_reopenMaxEarlierSecs = 0;
   double m_reopenMaxLaterSecs = 0;

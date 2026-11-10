@@ -382,7 +382,8 @@ DEMUX_PACKET* FFmpegStream::DemuxRead()
       {
         bReturnEmpty = true;
       }
-      else if ((m_isRealTimeStream || m_continuationState != ContinuationState::NONE) &&
+      else if ((m_isRealTimeStream || m_gapRepairEnabled ||
+                m_continuationState != ContinuationState::NONE) &&
                IsReplayedLivePacket(m_pkt.pkt, stream))
       {
         bReturnEmpty = true;
@@ -1123,6 +1124,7 @@ void FFmpegStream::ResetReplayDetection()
   m_replayGuards.clear();
   m_continuationState = ContinuationState::NONE;
   m_startTimePinned = false;
+  m_gapRepairRequested = false;
   m_skipUntilTs = STREAM_NOPTS_VALUE;
   m_skipAudioFloorTs = STREAM_NOPTS_VALUE;
   m_skipVideoStarted = false;
@@ -1314,13 +1316,26 @@ bool FFmpegStream::IsReplayedLivePacket(const AVPacket& pkt, const AVStream* str
           __FUNCTION__, pkt.stream_index, guard.droppedPackets);
       guard.skipping = false;
     }
-    else if (guard.highWaterTs != AV_NOPTS_VALUE)
+
+    if (guard.highWaterTs != AV_NOPTS_VALUE)
     {
-      // Normally packets are well under a second apart, report holes in the source data
+      // Normally packets are well under a second apart, so this is a hole in the source data
       const double gapSecs = static_cast<double>(ts - guard.highWaterTs) * av_q2d(stream->time_base);
       if (gapSecs > 0.5)
-        Log(LOGLEVEL_INFO, "%s - Stream %d: source timestamps jump forward %.2f seconds, data missing from the source?",
-            __FUNCTION__, pkt.stream_index, gapSecs);
+      {
+        const bool alreadyRefetched = guard.refetchedGapAt == guard.highWaterTs;
+        if (m_gapRepairEnabled && !alreadyRefetched)
+        {
+          Log(LOGLEVEL_INFO, "%s - Stream %d: %.2f seconds missing from the source, refetching from the last delivered position",
+              __FUNCTION__, pkt.stream_index, gapSecs);
+          guard.refetchedGapAt = guard.highWaterTs;
+          m_gapRepairRequested = true;
+          return true; // hold back, the data before it is fetched again first
+        }
+
+        Log(LOGLEVEL_INFO, "%s - Stream %d: source timestamps jump forward %.2f seconds, data missing from the source%s",
+            __FUNCTION__, pkt.stream_index, gapSecs, alreadyRefetched ? " (still missing after refetching)" : "");
+      }
     }
     guard.highWaterTs = ts;
     remember(ts);

@@ -171,7 +171,23 @@ bool FFmpegCatchupStream::DemuxSeekTime(double timeMs, bool backwards, double& s
 
 DEMUX_PACKET* FFmpegCatchupStream::DemuxRead()
 {
+  // Refetch holes in the data by time instead of trusting the HTTP connection: servers like
+  // Dispatcharr resume a dropped connection at the wrong place, skipping seconds of content
+  EnableGapRepair(!m_lastSeekWasLive && !m_isOpeningStream && m_catchupBufferStartTime > 0);
+
   DEMUX_PACKET* pPacket = FFmpegStream::DemuxRead();
+
+  if (ConsumeGapRepairRequest())
+  {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    Log(LOGLEVEL_INFO, "%s - Reopening catchup stream at the last delivered position %.3f seconds to refetch missing data",
+        __FUNCTION__, m_currentDemuxTime / 1000);
+    m_seekCorrectsEOF = true;
+    m_continuationSeek = true;
+    DemuxSeekTime(m_currentDemuxTime);
+    m_seekCorrectsEOF = false;
+  }
+
   if (pPacket)
   {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
