@@ -27,6 +27,7 @@ extern "C" {
 #include <libavutil/opt.h>
 }
 
+#include <algorithm>
 #include <iomanip>
 #include <regex>
 
@@ -91,14 +92,34 @@ bool FFmpegCatchupStream::DemuxSeekTime(double timeMs, bool backwards, double& s
   int64_t seekResult = SeekCatchupStream(timeMs, backwards);
   if (seekResult >= 0)
   {
+    double skipTarget = STREAM_NOPTS_VALUE;
     {
       std::lock_guard<std::recursive_mutex> lock(m_mutex);
-      m_seekOffset = seekResult;
+      m_hasPendingContinuationOffset = false;
 
-      if (continuationSeek && !m_lastSeekWasLive)
+      if (continuationSeek && !m_lastSeekWasLive && !m_isOpeningStream)
+      {
+        // Continuing from the current position. Catchup archives of a live channel normally
+        // carry the original timestamps, in which case keeping the current mapping continues
+        // playback exactly, wherever the server really starts the new stream. Only switch to
+        // the offset derived from the new URL if the new stream turns out to be unrelated.
+        const double currentSecs = m_currentDemuxTime / 1000;
+        const double newStartSecs = static_cast<double>(seekResult) / STREAM_TIME_BASE;
+        PrepareContinuation(std::max(0.0, currentSecs - newStartSecs));
+        m_pendingContinuationOffset = seekResult;
+        m_hasPendingContinuationOffset = true;
         m_continuationTimestamps = m_lastDemuxTimestamps;
+      }
       else
+      {
+        m_seekOffset = seekResult;
         m_continuationTimestamps.clear();
+
+        // The stream may start before the requested position (granularity), skip ahead to it
+        if (!m_isOpeningStream && !m_lastSeekWasLive && m_seekTargetBufferOffset >= 0 &&
+            static_cast<double>(m_seekTargetBufferOffset) * STREAM_TIME_BASE > m_seekOffset)
+          skipTarget = static_cast<double>(m_seekTargetBufferOffset) * STREAM_TIME_BASE - m_seekOffset;
+      }
       m_lastDemuxTimestamps.clear();
       m_continuationDroppedPackets = 0;
     }
@@ -109,6 +130,8 @@ bool FFmpegCatchupStream::DemuxSeekTime(double timeMs, bool backwards, double& s
     if (!m_isOpeningStream)
     {
       DemuxReset();
+      if (m_demuxResetOpenSuccess && skipTarget != STREAM_NOPTS_VALUE)
+        SkipUntil(skipTarget);
       return m_demuxResetOpenSuccess;
     }
 
@@ -126,6 +149,22 @@ DEMUX_PACKET* FFmpegCatchupStream::DemuxRead()
   if (pPacket)
   {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+    if (m_hasPendingContinuationOffset)
+    {
+      const ContinuationState state = GetContinuationState();
+      if (state == ContinuationState::FALLBACK)
+      {
+        Log(LOGLEVEL_INFO, "%s - Continued stream uses its own timeline, applying offset of the new catchup URL", __FUNCTION__);
+        m_seekOffset = m_pendingContinuationOffset;
+        m_hasPendingContinuationOffset = false;
+      }
+      else if (state != ContinuationState::PENDING)
+      {
+        m_hasPendingContinuationOffset = false;
+      }
+    }
+
     // Only shift real timestamps, adding the offset to STREAM_NOPTS_VALUE (e.g. for the
     // empty packets returned on timeouts) produces a bogus time which then ends up in
     // m_currentDemuxTime and breaks continuing the stream on EOF or after a pause.
@@ -287,6 +326,7 @@ int64_t FFmpegCatchupStream::SeekCatchupStream(double timeMs, bool backwards)
       seekBufferOffset += 500;
       seekBufferOffset /= 1000;
       Log(LOGLEVEL_INFO, "%s - Seek offset: %lld - time: %s", __FUNCTION__, static_cast<long long>(seekBufferOffset), GetDateTime(m_catchupBufferStartTime + seekBufferOffset).c_str());
+      m_seekTargetBufferOffset = -1;
 
       if (!SeekDistanceSupported(seekBufferOffset))
         return -1;
@@ -300,6 +340,8 @@ int64_t FFmpegCatchupStream::SeekCatchupStream(double timeMs, bool backwards)
       {
         if (!TargetDistanceFromLiveSupported(liveBufferOffset - seekBufferOffset)) // terminating streams only
           return -1;
+
+        m_seekTargetBufferOffset = seekBufferOffset;
 
         if (m_catchupGranularity > 1 && 3600 % m_catchupGranularity == 0)
         {
