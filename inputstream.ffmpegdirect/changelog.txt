@@ -1,3 +1,6 @@
+v69.2.14
+- Catchup: fix resuming after pause jumping back up to a minute when the server starts the continued stream at the beginning of its minute/chunk
+
 v69.2.13
 - Catchup: use the source timestamps to find the real position after every seek, not only when continuing, and skip ahead to the requested position. Fixes seeks starting at the beginning of the server's minute/chunk and repeated short seeks replaying the same piece of video (servers round the URL's seconds down)
 - Drop small overlaps of already delivered data as well as large replays
