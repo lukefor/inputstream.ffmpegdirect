@@ -104,12 +104,12 @@ public:
   AVFormatContext* m_pFormatContext;
   std::shared_ptr<CurlInput> m_curlInput;
 
-  // How a stream reopened by PrepareContinuation() maps onto the previous timeline
+  // How a stream reopened after PrepareReopen() maps onto the previous timeline
   enum class ContinuationState
   {
-    NONE, // not a continuation
+    NONE, // not a reopen
     PENDING, // reopened, waiting for the first audio/video packet to decide
-    SOURCE_TIMELINE, // source timestamps continue the previous stream, previous mapping kept
+    SOURCE_TIMELINE, // new stream carries the same source timestamps, previous mapping kept
     FALLBACK, // unrelated timestamps, the caller has to supply a new mapping
   };
 
@@ -117,22 +117,24 @@ protected:
   virtual std::string GetStreamCodecName(int iStreamId);
 
   /*!
-   * Call before reopening the stream to continue from the current position (e.g. a new
-   * catchup URL). If the new stream carries the same source timestamps (the same encoder,
-   * as with archives of a live channel), the current timestamp mapping is kept and data
-   * already delivered is dropped exactly, so playback continues seamlessly.
-   * @param maxBacktrackSecs how far before the current position the new stream may start
+   * Call before reopening the stream with a new URL for another position of the same source
+   * (e.g. a catchup seek or continuing a terminating catchup stream). Archives of a live
+   * channel keep the channel's original timestamps, so if the first packets of the new stream
+   * land near the expected position using the current mapping, that mapping is kept: the real
+   * position is then known exactly, wherever the server actually starts the new stream.
+   * Otherwise GetContinuationState() reports FALLBACK and the caller must supply a new mapping.
+   * All times are in the timestamps produced by this class (STREAM_TIME_BASE units).
+   * @param expectedTs where the new stream should start
+   * @param maxEarlierSecs how much earlier than expected the new stream may start
+   * @param maxLaterSecs how much later than expected the new stream may start
+   * @param keepReplayHistory keep dropping data that was already delivered (continuing), or
+   *                          not (seeking, where earlier data may be wanted again)
+   * @param skipTargetSource drop data before this position if the mapping is kept
+   * @param skipTargetFallback drop data before this position with the new stream's own mapping
    */
-  void PrepareContinuation(double maxBacktrackSecs);
+  void PrepareReopen(double expectedTs, double maxEarlierSecs, double maxLaterSecs,
+                     bool keepReplayHistory, double skipTargetSource, double skipTargetFallback);
   ContinuationState GetContinuationState() const { return m_continuationState; }
-
-  /*!
-   * After a seek where the stream starts before the requested position (e.g. catchup URLs
-   * with minute granularity), drop data until the first video keyframe at or after the
-   * target so playback starts where the user asked instead of up to a minute earlier.
-   * @param targetTs target in the timestamps produced by this class (STREAM_TIME_BASE)
-   */
-  void SkipUntil(double targetTs);
   virtual void CurrentPTSUpdated();
   bool IsPaused() { return m_speed == STREAM_PLAYSPEED_PAUSE; }
   virtual bool CheckReturnEmptyOnPacketResult(int result);
@@ -180,6 +182,7 @@ private:
   void ResetReplayDetection();
   double GetTimestampStartTime() const;
   bool CheckContinuationTimeline(const AVPacket& pkt, const AVStream* stream);
+  void SkipUntil(double targetTs);
   bool IsBeforeSkipTarget(const DEMUX_PACKET* packet, const AVStream* stream, bool keyFrame);
 
   bool StreamsOpened() { return m_streams.size() > 0; }
@@ -248,7 +251,11 @@ private:
   std::map<int, ReplayGuard> m_replayGuards;
 
   ContinuationState m_continuationState = ContinuationState::NONE;
-  double m_continuationMaxBacktrackSecs = 0;
+  double m_reopenExpectedTs = 0;
+  double m_reopenMaxEarlierSecs = 0;
+  double m_reopenMaxLaterSecs = 0;
+  double m_reopenSkipTargetSource = STREAM_NOPTS_VALUE;
+  double m_reopenSkipTargetFallback = STREAM_NOPTS_VALUE;
   double m_pinnedStartTime = 0; // seconds, used instead of the stream's start time when pinned
   bool m_startTimePinned = false;
 

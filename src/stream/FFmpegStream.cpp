@@ -1128,21 +1128,32 @@ void FFmpegStream::ResetReplayDetection()
   m_skipVideoStarted = false;
 }
 
-void FFmpegStream::PrepareContinuation(double maxBacktrackSecs)
+void FFmpegStream::PrepareReopen(double expectedTs, double maxEarlierSecs, double maxLaterSecs,
+                                 bool keepReplayHistory, double skipTargetSource, double skipTargetFallback)
 {
   std::lock_guard<std::recursive_mutex> lock(m_mutex);
 
   if (!m_startTimePinned)
   {
     if (!m_pFormatContext)
+    {
+      m_continuationState = ContinuationState::NONE;
       return;
+    }
 
     // Keep converting timestamps relative to the current stream's start
     m_pinnedStartTime = GetTimestampStartTime();
     m_startTimePinned = true;
   }
 
-  m_continuationMaxBacktrackSecs = maxBacktrackSecs;
+  if (!keepReplayHistory)
+    m_replayGuards.clear();
+
+  m_reopenExpectedTs = expectedTs;
+  m_reopenMaxEarlierSecs = maxEarlierSecs;
+  m_reopenMaxLaterSecs = maxLaterSecs;
+  m_reopenSkipTargetSource = skipTargetSource;
+  m_reopenSkipTargetFallback = skipTargetFallback;
   m_continuationState = ContinuationState::PENDING;
   m_skipUntilTs = STREAM_NOPTS_VALUE;
 }
@@ -1159,32 +1170,26 @@ bool FFmpegStream::CheckContinuationTimeline(const AVPacket& pkt, const AVStream
   if (ts == AV_NOPTS_VALUE)
     return false;
 
-  // allow for jitter and for servers starting a little before/after what was asked for
-  constexpr double CONTINUATION_TOLERANCE_SECS = 30.0;
-
-  bool sameTimeline = false;
-  double diffSecs = 0;
-  const auto it = m_replayGuards.find(pkt.stream_index);
-  if (it != m_replayGuards.end() && it->second.highWaterTs != AV_NOPTS_VALUE &&
-      av_cmp_q(it->second.timeBase, stream->time_base) == 0)
-  {
-    diffSecs = static_cast<double>(ts - it->second.highWaterTs) * av_q2d(stream->time_base);
-    sameTimeline = diffSecs >= -(m_continuationMaxBacktrackSecs + CONTINUATION_TOLERANCE_SECS) &&
-                   diffSecs <= CONTINUATION_TOLERANCE_SECS;
-  }
+  // Where this packet lands with the current mapping
+  const double mappedSecs = static_cast<double>(ts) * av_q2d(stream->time_base) - m_pinnedStartTime;
+  const double diffSecs = mappedSecs - m_reopenExpectedTs / STREAM_TIME_BASE;
+  const bool sameTimeline = diffSecs >= -m_reopenMaxEarlierSecs && diffSecs <= m_reopenMaxLaterSecs;
 
   if (sameTimeline)
   {
-    Log(LOGLEVEL_INFO, "%s - Continued stream carries the source timestamps of the previous stream (starts %.2f seconds from the previous position), continuing seamlessly",
-        __FUNCTION__, diffSecs);
+    Log(LOGLEVEL_INFO, "%s - Reopened stream carries the same source timestamps, it starts %.2f seconds %s the requested position, keeping the timeline",
+        __FUNCTION__, std::fabs(diffSecs), diffSecs < 0 ? "before" : "after");
     m_continuationState = ContinuationState::SOURCE_TIMELINE;
+    SkipUntil(m_reopenSkipTargetSource);
   }
   else
   {
-    Log(LOGLEVEL_INFO, "%s - Continued stream has unrelated timestamps, using its own timeline", __FUNCTION__);
+    Log(LOGLEVEL_INFO, "%s - Reopened stream has unrelated timestamps (%.2f seconds from the requested position), using its own timeline",
+        __FUNCTION__, diffSecs);
     m_continuationState = ContinuationState::FALLBACK;
     m_startTimePinned = false;
     m_replayGuards.clear();
+    SkipUntil(m_reopenSkipTargetFallback);
   }
 
   return true;
@@ -1192,12 +1197,11 @@ bool FFmpegStream::CheckContinuationTimeline(const AVPacket& pkt, const AVStream
 
 void FFmpegStream::SkipUntil(double targetTs)
 {
-  std::lock_guard<std::recursive_mutex> lock(m_mutex);
-
-  Log(LOGLEVEL_DEBUG, "%s - Skipping data before %.3f seconds", __FUNCTION__, targetTs / STREAM_TIME_BASE);
   m_skipUntilTs = targetTs;
   m_skipAudioFloorTs = STREAM_NOPTS_VALUE;
   m_skipVideoStarted = false;
+  if (targetTs != STREAM_NOPTS_VALUE)
+    Log(LOGLEVEL_DEBUG, "%s - Skipping data before %.3f seconds", __FUNCTION__, targetTs / STREAM_TIME_BASE);
 }
 
 bool FFmpegStream::IsBeforeSkipTarget(const DEMUX_PACKET* packet, const AVStream* stream, bool keyFrame)
@@ -1306,9 +1310,17 @@ bool FFmpegStream::IsReplayedLivePacket(const AVPacket& pkt, const AVStream* str
   {
     if (guard.skipping)
     {
-      Log(LOGLEVEL_INFO, "%s - Stream %d: caught up with previously delivered data, dropped %d replayed packets",
+      Log(LOGLEVEL_INFO, "%s - Stream %d: caught up with previously delivered data, dropped %d already delivered packets",
           __FUNCTION__, pkt.stream_index, guard.droppedPackets);
       guard.skipping = false;
+    }
+    else if (guard.highWaterTs != AV_NOPTS_VALUE)
+    {
+      // Normally packets are well under a second apart, report holes in the source data
+      const double gapSecs = static_cast<double>(ts - guard.highWaterTs) * av_q2d(stream->time_base);
+      if (gapSecs > 0.5)
+        Log(LOGLEVEL_INFO, "%s - Stream %d: source timestamps jump forward %.2f seconds, data missing from the source?",
+            __FUNCTION__, pkt.stream_index, gapSecs);
     }
     guard.highWaterTs = ts;
     remember(ts);
@@ -1318,11 +1330,13 @@ bool FFmpegStream::IsReplayedLivePacket(const AVPacket& pkt, const AVStream* str
   const int64_t oneSecond = av_rescale_q(AV_TIME_BASE, AV_TIME_BASE_Q, stream->time_base);
   const bool largeJumpBack = guard.highWaterTs - ts >= oneSecond;
 
-  if (guard.deliveredTs.count(ts) > 0 && (guard.skipping || largeJumpBack))
+  // Timestamps already delivered are duplicates, whether the source went back a long way
+  // (reconnect) or only a little (overlapping archive chunks)
+  if (guard.deliveredTs.count(ts) > 0)
   {
     if (!guard.skipping)
     {
-      Log(LOGLEVEL_WARNING, "%s - Stream %d: source jumped back %.2f seconds to data already delivered (reconnect?), dropping replayed packets",
+      Log(largeJumpBack ? LOGLEVEL_WARNING : LOGLEVEL_INFO, "%s - Stream %d: source jumped back %.2f seconds to data already delivered, dropping it",
           __FUNCTION__, pkt.stream_index, static_cast<double>(guard.highWaterTs - ts) * av_q2d(stream->time_base));
       guard.skipping = true;
       guard.droppedPackets = 0;

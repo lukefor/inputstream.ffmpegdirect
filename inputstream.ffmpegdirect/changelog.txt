@@ -1,3 +1,8 @@
+v69.2.13
+- Catchup: use the source timestamps to find the real position after every seek, not only when continuing, and skip ahead to the requested position. Fixes seeks starting at the beginning of the server's minute/chunk and repeated short seeks replaying the same piece of video (servers round the URL's seconds down)
+- Drop small overlaps of already delivered data as well as large replays
+- Log forward gaps in the source timestamps to help diagnose missing data
+
 v69.2.12
 - Catchup: keep the timestamp mapping when a stream is continued (EOF on terminating streams, resume after pause) if the new stream carries the same source timestamps, removing the small skip at each continuation
 - Catchup: after a seek, skip ahead to the requested position when the server starts the stream earlier (minute granularity) instead of starting up to a minute before it
