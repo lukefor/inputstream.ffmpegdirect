@@ -5,6 +5,10 @@ name: Make Release
 
 on: workflow_dispatch
 
+# Needed to create the tag and release (the repository default may be read-only)
+permissions:
+  contents: write
+
 jobs:
   default:
     runs-on: ubuntu-latest
