@@ -92,33 +92,59 @@ bool FFmpegCatchupStream::DemuxSeekTime(double timeMs, bool backwards, double& s
   int64_t seekResult = SeekCatchupStream(timeMs, backwards);
   if (seekResult >= 0)
   {
-    double skipTarget = STREAM_NOPTS_VALUE;
     {
       std::lock_guard<std::recursive_mutex> lock(m_mutex);
       m_hasPendingContinuationOffset = false;
 
-      if (continuationSeek && !m_lastSeekWasLive && !m_isOpeningStream)
+      if (!m_isOpeningStream && m_pFormatContext)
       {
-        // Continuing from the current position. Catchup archives of a live channel normally
-        // carry the original timestamps, in which case keeping the current mapping continues
-        // playback exactly, wherever the server really starts the new stream. Only switch to
-        // the offset derived from the new URL if the new stream turns out to be unrelated.
-        const double currentSecs = m_currentDemuxTime / 1000;
-        const double newStartSecs = static_cast<double>(seekResult) / STREAM_TIME_BASE;
-        PrepareContinuation(std::max(0.0, currentSecs - newStartSecs));
+        // Reopening the same source at another position. Archives of a live channel keep the
+        // channel's original timestamps, so keeping the current mapping tells us exactly where
+        // the new stream really starts. Servers often start earlier than asked for (whole
+        // minutes or archive chunks even when the URL has seconds), so playback is then skipped
+        // forward to the requested position. Only if the new stream turns out to be unrelated
+        // is the offset derived from the new URL used instead.
+        const double currentOffset = m_seekOffset;
+        const double newOffsetSecs = static_cast<double>(seekResult) / STREAM_TIME_BASE;
+        double expectedSecs = newOffsetSecs;
+        double maxEarlierSecs = MAX_REOPEN_START_EARLIER_SECS;
+        bool keepReplayHistory = false;
+        double skipTargetSource = STREAM_NOPTS_VALUE;
+        double skipTargetFallback = STREAM_NOPTS_VALUE;
+
+        if (continuationSeek && !m_lastSeekWasLive)
+        {
+          // continue from the current position, dropping what was already delivered
+          const double currentSecs = m_currentDemuxTime / 1000;
+          expectedSecs = currentSecs;
+          maxEarlierSecs = std::max(0.0, currentSecs - newOffsetSecs) + REOPEN_START_TOLERANCE_SECS;
+          keepReplayHistory = true;
+          m_continuationTimestamps = m_lastDemuxTimestamps;
+        }
+        else
+        {
+          m_continuationTimestamps.clear();
+
+          if (!m_lastSeekWasLive && m_seekTargetBufferOffset >= 0)
+          {
+            const double targetSecs = static_cast<double>(m_seekTargetBufferOffset);
+            expectedSecs = targetSecs;
+            skipTargetSource = targetSecs * STREAM_TIME_BASE - currentOffset;
+            if (targetSecs > newOffsetSecs)
+              skipTargetFallback = (targetSecs - newOffsetSecs) * STREAM_TIME_BASE;
+          }
+        }
+
+        PrepareReopen(expectedSecs * STREAM_TIME_BASE - currentOffset, maxEarlierSecs,
+                      REOPEN_START_TOLERANCE_SECS, keepReplayHistory, skipTargetSource,
+                      skipTargetFallback);
         m_pendingContinuationOffset = seekResult;
         m_hasPendingContinuationOffset = true;
-        m_continuationTimestamps = m_lastDemuxTimestamps;
       }
       else
       {
         m_seekOffset = seekResult;
         m_continuationTimestamps.clear();
-
-        // The stream may start before the requested position (granularity), skip ahead to it
-        if (!m_isOpeningStream && !m_lastSeekWasLive && m_seekTargetBufferOffset >= 0 &&
-            static_cast<double>(m_seekTargetBufferOffset) * STREAM_TIME_BASE > m_seekOffset)
-          skipTarget = static_cast<double>(m_seekTargetBufferOffset) * STREAM_TIME_BASE - m_seekOffset;
       }
       m_lastDemuxTimestamps.clear();
       m_continuationDroppedPackets = 0;
@@ -130,8 +156,6 @@ bool FFmpegCatchupStream::DemuxSeekTime(double timeMs, bool backwards, double& s
     if (!m_isOpeningStream)
     {
       DemuxReset();
-      if (m_demuxResetOpenSuccess && skipTarget != STREAM_NOPTS_VALUE)
-        SkipUntil(skipTarget);
       return m_demuxResetOpenSuccess;
     }
 
@@ -153,7 +177,7 @@ DEMUX_PACKET* FFmpegCatchupStream::DemuxRead()
     if (m_hasPendingContinuationOffset)
     {
       const ContinuationState state = GetContinuationState();
-      if (state == ContinuationState::FALLBACK)
+      if (state == ContinuationState::FALLBACK || state == ContinuationState::NONE)
       {
         Log(LOGLEVEL_INFO, "%s - Continued stream uses its own timeline, applying offset of the new catchup URL", __FUNCTION__);
         m_seekOffset = m_pendingContinuationOffset;
