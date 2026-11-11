@@ -199,14 +199,18 @@ DEMUX_PACKET* FFmpegCatchupStream::DemuxRead()
 
   DEMUX_PACKET* pPacket = FFmpegStream::DemuxRead();
 
-  if (ConsumeGapRepairRequest())
+  const int refetchAttempt = ConsumeGapRepairRequest();
+  if (refetchAttempt > 0)
   {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    Log(LOGLEVEL_INFO, "%s - Reopening catchup stream at the last delivered position %.3f seconds to refetch missing data",
-        __FUNCTION__, m_currentDemuxTime / 1000);
+    // First from the last delivered position. If the server's data for that position still
+    // starts too late, ask for an earlier position: what was already delivered is dropped.
+    const double requestMs = m_currentDemuxTime - (refetchAttempt > 1 ? GAP_REFETCH_REWIND_SECS * 1000 : 0);
+    Log(LOGLEVEL_INFO, "%s - Reopening catchup stream at %.3f seconds (last delivered %.3f) to refetch missing data",
+        __FUNCTION__, requestMs / 1000, m_currentDemuxTime / 1000);
     m_seekCorrectsEOF = true;
     m_continuationSeek = true;
-    DemuxSeekTime(m_currentDemuxTime);
+    DemuxSeekTime(requestMs);
     m_seekCorrectsEOF = false;
   }
 

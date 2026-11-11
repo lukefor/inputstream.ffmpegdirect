@@ -27,6 +27,8 @@ static constexpr double MAX_REOPEN_START_OFFSET_SECS = 300.0;
 static constexpr double REOPEN_START_TOLERANCE_SECS = 30.0;
 // How far ahead of the data already read a seek is served by reading on instead of reopening
 static constexpr double LOCAL_SEEK_MAX_FORWARD_SECS = 60.0;
+// How much earlier the second attempt to refetch missing data asks for
+static constexpr double GAP_REFETCH_REWIND_SECS = 60.0;
 
 class FFmpegCatchupStream : public FFmpegStream
 {
