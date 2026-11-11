@@ -144,6 +144,21 @@ protected:
    * accepted as missing from the source.
    */
   void EnableGapRepair(bool enable) { m_gapRepairEnabled = enable; }
+
+  /*!
+   * Keep the most recently read packets in memory (up to PACKET_CACHE_MAX_BYTES) so that
+   * SeekWithinStream() can serve seeks without reopening the stream.
+   */
+  void EnablePacketCache(bool enable) { m_packetCacheEnabled = enable; }
+
+  /*!
+   * Seek without reopening the stream: backwards into the packets kept in memory, or forwards
+   * by reading on and dropping data until the target, if it is at most maxForwardSecs ahead.
+   * Used for short skips and Kodi's fast forward / rewind, which are a series of small seeks.
+   * @param targetTs target in the timestamps produced by this class (STREAM_TIME_BASE)
+   * @return false if the target can't be reached this way and the stream has to be reopened
+   */
+  bool SeekWithinStream(double targetTs, double maxForwardSecs);
   bool ConsumeGapRepairRequest()
   {
     const bool requested = m_gapRepairRequested;
@@ -199,6 +214,10 @@ private:
   bool CheckContinuationTimeline(const AVPacket& pkt, const AVStream* stream);
   void SkipUntil(double targetTs);
   bool IsBeforeSkipTarget(const DEMUX_PACKET* packet, const AVStream* stream, bool keyFrame);
+  void AddToPacketCache(const AVPacket& pkt);
+  void ClearPacketCache();
+  double GetPacketTimestamp(const AVPacket* pkt);
+  bool IsAudioOrVideoPacket(const AVPacket* pkt) const;
 
   bool StreamsOpened() { return m_streams.size() > 0; }
 
@@ -267,6 +286,13 @@ private:
   std::map<int, ReplayGuard> m_replayGuards;
 
   ContinuationState m_continuationState = ContinuationState::NONE;
+
+  // ~1.5 minutes at typical HD IPTV bitrates
+  static constexpr size_t PACKET_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+  bool m_packetCacheEnabled = false;
+  std::deque<AVPacket*> m_packetCache;
+  size_t m_packetCacheBytes = 0;
+  size_t m_packetCacheReadIndex = 0; // == size() when reading from the source
 
   bool m_gapRepairEnabled = false;
   bool m_gapRepairRequested = false;

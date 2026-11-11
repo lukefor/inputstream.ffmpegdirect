@@ -315,10 +315,21 @@ DEMUX_PACKET* FFmpegStream::DemuxRead()
       m_pkt.pkt.size = 0;
       m_pkt.pkt.data = NULL;
 
-      // timeout reads after 100ms
-      m_timeout.Set(20000);
-      m_pkt.result = av_read_frame(m_pFormatContext, &m_pkt.pkt);
-      m_timeout.SetInfinite();
+      if (m_packetCacheReadIndex < m_packetCache.size())
+      {
+        // replaying packets kept in memory after a seek within the stream
+        m_pkt.result = av_packet_ref(&m_pkt.pkt, m_packetCache[m_packetCacheReadIndex++]);
+      }
+      else
+      {
+        // timeout reads after 100ms
+        m_timeout.Set(20000);
+        m_pkt.result = av_read_frame(m_pFormatContext, &m_pkt.pkt);
+        m_timeout.SetInfinite();
+
+        if (m_pkt.result >= 0 && m_packetCacheEnabled)
+          AddToPacketCache(m_pkt.pkt);
+      }
     }
 
     m_lastPacketResult = m_pkt.result;
@@ -665,6 +676,8 @@ void FFmpegStream::Dispose()
     }
     avformat_close_input(&m_pFormatContext);
   }
+
+  ClearPacketCache();
 
   if (m_ioContext)
   {
@@ -1256,6 +1269,127 @@ bool FFmpegStream::IsBeforeSkipTarget(const DEMUX_PACKET* packet, const AVStream
   }
 
   return false;
+}
+
+void FFmpegStream::AddToPacketCache(const AVPacket& pkt)
+{
+  AVPacket* copy = av_packet_clone(&pkt);
+  if (!copy)
+    return;
+
+  m_packetCache.push_back(copy);
+  m_packetCacheBytes += copy->size;
+
+  while (m_packetCacheBytes > PACKET_CACHE_MAX_BYTES && m_packetCache.size() > 1)
+  {
+    AVPacket* oldest = m_packetCache.front();
+    m_packetCacheBytes -= oldest->size;
+    av_packet_free(&oldest);
+    m_packetCache.pop_front();
+  }
+
+  m_packetCacheReadIndex = m_packetCache.size();
+}
+
+void FFmpegStream::ClearPacketCache()
+{
+  for (AVPacket* pkt : m_packetCache)
+    av_packet_free(&pkt);
+  m_packetCache.clear();
+  m_packetCacheBytes = 0;
+  m_packetCacheReadIndex = 0;
+}
+
+bool FFmpegStream::IsAudioOrVideoPacket(const AVPacket* pkt) const
+{
+  if (!m_pFormatContext || pkt->stream_index < 0 ||
+      pkt->stream_index >= static_cast<int>(m_pFormatContext->nb_streams))
+    return false;
+
+  const AVCodecParameters* codecpar = m_pFormatContext->streams[pkt->stream_index]->codecpar;
+  return codecpar && (codecpar->codec_type == AVMEDIA_TYPE_VIDEO ||
+                      codecpar->codec_type == AVMEDIA_TYPE_AUDIO);
+}
+
+double FFmpegStream::GetPacketTimestamp(const AVPacket* pkt)
+{
+  if (!m_pFormatContext || pkt->stream_index < 0 ||
+      pkt->stream_index >= static_cast<int>(m_pFormatContext->nb_streams))
+    return STREAM_NOPTS_VALUE;
+
+  const AVStream* stream = m_pFormatContext->streams[pkt->stream_index];
+  const int64_t ts = pkt->dts != AV_NOPTS_VALUE ? pkt->dts : pkt->pts;
+  return ConvertTimestamp(ts, stream->time_base.den, stream->time_base.num);
+}
+
+bool FFmpegStream::SeekWithinStream(double targetTs, double maxForwardSecs)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+  if (!m_packetCacheEnabled || !m_pFormatContext || m_packetCache.empty() ||
+      m_continuationState == ContinuationState::PENDING)
+    return false;
+
+  // The audio/video time range held in memory
+  double firstTs = STREAM_NOPTS_VALUE;
+  double lastTs = STREAM_NOPTS_VALUE;
+  for (const AVPacket* pkt : m_packetCache)
+  {
+    if (IsAudioOrVideoPacket(pkt) && (firstTs = GetPacketTimestamp(pkt)) != STREAM_NOPTS_VALUE)
+      break;
+  }
+  for (auto it = m_packetCache.rbegin(); it != m_packetCache.rend(); ++it)
+  {
+    if (IsAudioOrVideoPacket(*it) && (lastTs = GetPacketTimestamp(*it)) != STREAM_NOPTS_VALUE)
+      break;
+  }
+  if (firstTs == STREAM_NOPTS_VALUE || lastTs == STREAM_NOPTS_VALUE || targetTs < firstTs)
+    return false;
+
+  size_t startIndex = m_packetCache.size();
+  if (targetTs > lastTs)
+  {
+    // Ahead of what has been read: read on, dropping data until the target
+    if (targetTs - lastTs > maxForwardSecs * STREAM_TIME_BASE)
+      return false;
+  }
+  else
+  {
+    // Replay from the last video keyframe at or before the target
+    startIndex = 0;
+    for (size_t i = m_packetCache.size(); i-- > 0;)
+    {
+      const AVPacket* pkt = m_packetCache[i];
+      if ((pkt->flags & AV_PKT_FLAG_KEY) && m_pFormatContext->streams[pkt->stream_index]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+      {
+        const double ts = GetPacketTimestamp(pkt);
+        if (ts != STREAM_NOPTS_VALUE && ts <= targetTs)
+        {
+          startIndex = i;
+          break;
+        }
+      }
+    }
+  }
+
+  Log(LOGLEVEL_INFO, "%s - Seeking to %.3f seconds within the open stream (%.3f to %.3f seconds in memory, %s)",
+      __FUNCTION__, targetTs / STREAM_TIME_BASE, firstTs / STREAM_TIME_BASE, lastTs / STREAM_TIME_BASE,
+      startIndex < m_packetCache.size() ? "replaying from memory" : "reading ahead");
+
+  m_pkt.result = -1;
+  av_packet_unref(&m_pkt.pkt);
+  m_packetCacheReadIndex = startIndex;
+
+  // Data before the target is delivered again, so forget what was delivered
+  m_replayGuards.clear();
+  m_gapRepairRequested = false;
+  SkipUntil(targetTs);
+
+  m_currentPts = STREAM_NOPTS_VALUE;
+  m_displayTime = 0;
+  m_dtsAtDisplayTime = STREAM_NOPTS_VALUE;
+
+  return true;
 }
 
 double FFmpegStream::GetTimestampStartTime() const
