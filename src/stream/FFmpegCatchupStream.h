@@ -19,11 +19,14 @@ namespace ffmpegdirect
 static const int VIDEO_PLAYER_BUFFER_SECONDS = 10;
 static const int TERMINATING_SECOND_STREAM_MIN_SEEK_FROM_LIVE_TIME = 60;
 static const int TERMINATING_MINUTE_STREAM_MIN_SEEK_FROM_LIVE_TIME = 120;
-// How much earlier than requested a reopened stream may start and still be accepted as the same
-// source timeline (servers can start at whole minutes or larger archive chunks)
-static constexpr double MAX_REOPEN_START_EARLIER_SECS = 300.0;
-// Allowance for a reopened stream starting later than requested
+// How far from the requested position a reopened stream may start and still be accepted as the
+// same source timeline. Servers can start at whole minutes or larger archive chunks, earlier or,
+// near live, later than asked. Unrelated timelines (e.g. a live stream) are hours apart.
+static constexpr double MAX_REOPEN_START_OFFSET_SECS = 300.0;
+// Additional allowance on top of how far back a continued stream is expected to start
 static constexpr double REOPEN_START_TOLERANCE_SECS = 30.0;
+// How far ahead of the data already read a seek is served by reading on instead of reopening
+static constexpr double LOCAL_SEEK_MAX_FORWARD_SECS = 60.0;
 
 class FFmpegCatchupStream : public FFmpegStream
 {

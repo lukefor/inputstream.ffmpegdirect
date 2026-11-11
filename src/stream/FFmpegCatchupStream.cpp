@@ -58,6 +58,7 @@ FFmpegCatchupStream::FFmpegCatchupStream(IManageDemuxPacket* demuxPacketManager,
     m_defaultProgrammeDuration(props.m_defaultProgrammeDurationSecs), m_programmeCatchupId(props.m_programmeCatchupId)
 {
   m_catchupGranularityLowWaterMark = m_catchupGranularity - (m_catchupGranularity / 4);
+  EnablePacketCache(true);
 }
 
 FFmpegCatchupStream::~FFmpegCatchupStream()
@@ -89,6 +90,27 @@ bool FFmpegCatchupStream::DemuxSeekTime(double timeMs, bool backwards, double& s
   if (/*!m_pInput ||*/ timeMs < 0)
     return false;
 
+  // Seeks into data still in memory, or a little ahead of it, are served by the open stream.
+  // Much quicker than a new request, and Kodi's fast forward / rewind is a stream of such seeks.
+  if (!continuationSeek && !m_isOpeningStream && !m_lastSeekWasLive && m_catchupBufferStartTime > 0 &&
+      timeMs / 1000 < GetCurrentLiveOffset() - VIDEO_PLAYER_BUFFER_SECONDS)
+  {
+    double targetTs;
+    {
+      std::lock_guard<std::recursive_mutex> lock(m_mutex);
+      targetTs = timeMs * 1000 - m_seekOffset;
+    }
+
+    if (SeekWithinStream(targetTs, LOCAL_SEEK_MAX_FORWARD_SECS))
+    {
+      std::lock_guard<std::recursive_mutex> lock(m_mutex);
+      m_continuationTimestamps.clear();
+      m_lastDemuxTimestamps.clear();
+      m_currentDemuxTime = timeMs;
+      return true;
+    }
+  }
+
   int64_t seekResult = SeekCatchupStream(timeMs, backwards);
   if (seekResult >= 0)
   {
@@ -107,7 +129,7 @@ bool FFmpegCatchupStream::DemuxSeekTime(double timeMs, bool backwards, double& s
         const double currentOffset = m_seekOffset;
         const double newOffsetSecs = static_cast<double>(seekResult) / STREAM_TIME_BASE;
         double expectedSecs = newOffsetSecs;
-        double maxEarlierSecs = MAX_REOPEN_START_EARLIER_SECS;
+        double maxEarlierSecs = MAX_REOPEN_START_OFFSET_SECS;
         bool keepReplayHistory = false;
         double skipTargetSource = STREAM_NOPTS_VALUE;
         double skipTargetFallback = STREAM_NOPTS_VALUE;
@@ -118,7 +140,7 @@ bool FFmpegCatchupStream::DemuxSeekTime(double timeMs, bool backwards, double& s
           const double currentSecs = m_currentDemuxTime / 1000;
           expectedSecs = currentSecs;
           // The server can start up to a whole chunk before even the requested position
-          maxEarlierSecs = std::max(MAX_REOPEN_START_EARLIER_SECS,
+          maxEarlierSecs = std::max(MAX_REOPEN_START_OFFSET_SECS,
                                     std::max(0.0, currentSecs - newOffsetSecs) + REOPEN_START_TOLERANCE_SECS);
           keepReplayHistory = true;
           m_continuationTimestamps = m_lastDemuxTimestamps;
@@ -138,7 +160,7 @@ bool FFmpegCatchupStream::DemuxSeekTime(double timeMs, bool backwards, double& s
         }
 
         PrepareReopen(expectedSecs * STREAM_TIME_BASE - currentOffset, maxEarlierSecs,
-                      REOPEN_START_TOLERANCE_SECS, keepReplayHistory, skipTargetSource,
+                      MAX_REOPEN_START_OFFSET_SECS, keepReplayHistory, skipTargetSource,
                       skipTargetFallback);
         m_pendingContinuationOffset = seekResult;
         m_hasPendingContinuationOffset = true;
@@ -292,9 +314,19 @@ void FFmpegCatchupStream::DemuxSetSpeed(int speed)
   {
     // Resume Playback
     Log(LOGLEVEL_DEBUG, "%s - DemuxSetSpeed - Unpause time: %lld", __FUNCTION__, static_cast<long long>(m_pauseStartTime));
-    m_lastSeekWasLive = false;
-    m_continuationSeek = true;
-    DemuxSeekTime(m_pauseStartTime);
+    if (m_lastSeekWasLive)
+    {
+      // Paused live TV: continue from the pause point as catchup (timeshift)
+      m_lastSeekWasLive = false;
+      m_continuationSeek = true;
+      DemuxSeekTime(m_pauseStartTime);
+    }
+    else
+    {
+      // Already playing the archive: carry on with the open stream. If the server dropped the
+      // connection meanwhile, the missing data is refetched like any other gap or EOF.
+      Log(LOGLEVEL_INFO, "%s - Resuming catchup playback with the open stream", __FUNCTION__);
+    }
   }
   else if (!IsPaused() && speed == STREAM_PLAYSPEED_PAUSE)
   {
@@ -378,11 +410,16 @@ int64_t FFmpegCatchupStream::SeekCatchupStream(double timeMs, bool backwards)
 
       Log(LOGLEVEL_DEBUG, "%s - seekBufferOffset %lld < liveBufferOffset %lld -10", __FUNCTION__, static_cast<long long>(seekBufferOffset), liveBufferOffset);
 
-      if (seekBufferOffset < liveBufferOffset - VIDEO_PLAYER_BUFFER_SECONDS) // (-10 seconds)
+      bool seekToLive = seekBufferOffset >= liveBufferOffset - VIDEO_PLAYER_BUFFER_SECONDS; // (-10 seconds)
+      if (!seekToLive && !TargetDistanceFromLiveSupported(liveBufferOffset - seekBufferOffset)) // terminating streams only
       {
-        if (!TargetDistanceFromLiveSupported(liveBufferOffset - seekBufferOffset)) // terminating streams only
-          return -1;
+        // The server can't provide catchup this close to live, the nearest thing is live itself
+        Log(LOGLEVEL_INFO, "%s - Too close to live for catchup, seeking to live instead", __FUNCTION__);
+        seekToLive = true;
+      }
 
+      if (!seekToLive)
+      {
         m_seekTargetBufferOffset = seekBufferOffset;
 
         if (m_catchupGranularity > 1 && 3600 % m_catchupGranularity == 0)
@@ -457,11 +494,11 @@ bool FFmpegCatchupStream::TargetDistanceFromLiveSupported(long long secondsFromL
     if ((m_catchupGranularity == 1 && secondsFromLive < (TERMINATING_SECOND_STREAM_MIN_SEEK_FROM_LIVE_TIME - 5)) ||
         (m_catchupGranularity > 1 && secondsFromLive < (TERMINATING_MINUTE_STREAM_MIN_SEEK_FROM_LIVE_TIME - 5)))
     {
-      Log(LOGLEVEL_INFO, "%s - skipping as %d seconds from live is too close", __FUNCTION__, secondsFromLive);
+      Log(LOGLEVEL_INFO, "%s - skipping as %lld seconds from live is too close", __FUNCTION__, secondsFromLive);
       return false;
     }
 
-    Log(LOGLEVEL_INFO, "%s - %d seconds from live is ok", __FUNCTION__, secondsFromLive, secondsFromLive);
+    Log(LOGLEVEL_INFO, "%s - %lld seconds from live is ok", __FUNCTION__, secondsFromLive);
   }
 
   return true;
