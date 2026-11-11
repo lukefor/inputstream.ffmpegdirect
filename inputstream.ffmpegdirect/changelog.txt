@@ -1,3 +1,6 @@
+v69.2.17
+- Catchup: if refetching missing data from the last delivered position gets a stream that still starts too late (Dispatcharr near live), try once more from a minute earlier before accepting the hole
+
 v69.2.16
 - Catchup: keep the last ~64 MB (about 1.5 minutes) of the stream in memory and serve seeks into it, or up to a minute ahead of it, from the open stream instead of a new request. Makes fast forward, rewind and short skips quick and independent of the server
 - Catchup: resuming after pause carries on with the open stream instead of reopening it (live TV paused into timeshift still switches to catchup)

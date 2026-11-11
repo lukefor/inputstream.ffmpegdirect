@@ -1457,13 +1457,17 @@ bool FFmpegStream::IsReplayedLivePacket(const AVPacket& pkt, const AVStream* str
       const double gapSecs = static_cast<double>(ts - guard.highWaterTs) * av_q2d(stream->time_base);
       if (gapSecs > 0.5)
       {
-        const bool alreadyRefetched = guard.refetchedGapAt == guard.highWaterTs;
+        if (guard.refetchedGapAt != guard.highWaterTs)
+          guard.refetchAttempts = 0;
+        const bool alreadyRefetched = guard.refetchAttempts >= MAX_GAP_REFETCH_ATTEMPTS;
         if (m_gapRepairEnabled && !alreadyRefetched)
         {
-          Log(LOGLEVEL_INFO, "%s - Stream %d: %.2f seconds missing from the source, refetching from the last delivered position",
-              __FUNCTION__, pkt.stream_index, gapSecs);
           guard.refetchedGapAt = guard.highWaterTs;
+          guard.refetchAttempts++;
+          Log(LOGLEVEL_INFO, "%s - Stream %d: %.2f seconds missing from the source, refetching (attempt %d)",
+              __FUNCTION__, pkt.stream_index, gapSecs, guard.refetchAttempts);
           m_gapRepairRequested = true;
+          m_gapRepairAttempt = guard.refetchAttempts;
           return true; // hold back, the data before it is fetched again first
         }
 
